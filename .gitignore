@@ -3,18 +3,12 @@ __pycache__/
 *.py[cod]
 *.log
 
-# Virtual environments
-venv/
-ENV/
-*.env
-
 # Compressed archives
 *.tar.gz
 *.zip
 *.xz
 *.zst
 
-# OS or Editor files
 .DS_Store
-.idea/
-.vscode/
+links.txt
+src/main-links.txt

@@ -1,49 +1,213 @@
 #!/usr/bin/env python3
 """
-github_repo_saver_gui.py
+Single-file GitHub Repo Saver with PyQt:
+- JSON-based storage (cloned_repos.json) tracks repos.
+- Adds new repos, clones/updates them in threads.
+- Displays each repo's info (URL, description, status, last cloned/updated) in a table.
+- Refresh button re-checks "archived/deleted" statuses on GitHub.
+- Buttons to open folder, show archives, view README, etc.
 
-PyQt-based GUI for GitHub Repo Saver:
-- Single or bulk addition of GitHub repos (stored in a text file).
-- Automatic detection & skipping of duplicates using 'main-links.txt'.
-- Each repo is cloned/updated exactly once (subsequent runs do a pull only),
-  thanks to cloned_repos.json from github_repo_saver.py.
-
-Modified so that *as each repo is cloned*, we add a new row to the table.
+No separate 'github_repo_saver.py' is needed; everything is in one file.
 """
 
 import sys
 import os
+import json
 import subprocess
 import logging
-import tempfile
-from datetime import datetime
-
+import datetime
 import requests
+
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtWidgets import (
-    QApplication, QWidget, QLabel, QLineEdit, QPushButton, QVBoxLayout,
-    QFileDialog, QMessageBox, QTableWidget, QTableWidgetItem, QHeaderView,
-    QHBoxLayout, QTextEdit, QDialog, QListWidget, QListWidgetItem
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout,
+    QTableWidget, QTableWidgetItem, QHeaderView,
+    QPushButton, QLabel, QLineEdit, QTextEdit, QMessageBox,
+    QDialog, QListWidget, QListWidgetItem, QFileDialog, 
+    QHBoxLayout, QVBoxLayout, QWidget
 )
+from PyQt5.QtWidgets import QDialog
 
-# Import saver logic
-from github_repo_saver import (
-    main as run_archiver,
-    check_for_updates,
-    create_versioned_archive,
-    clone_or_update_repo,
-    detect_deleted_or_archived,
-    validate_repo_url
-)
+
+###############################################################################
+#                               DATA & LOGIC
+###############################################################################
+
+CLONED_JSON_PATH = "src/cloned_repos.json"
+DATA_FOLDER = "data"  # local folder where repos will be cloned
+
+def setup_logging():
+    """Configure logging (not strictly necessary for a single-file demo)."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+def validate_repo_url(url: str) -> bool:
+    """
+    Check if URL starts with 'https://github.com/'.
+    Also optionally ensure .git suffix if you like.
+    """
+    return url.startswith("https://github.com/")
+
+def load_cloned_info() -> dict:
+    """
+    Loads cloned_repos.json which tracks each repo's data.
+    Structure example:
+    {
+      "https://github.com/user/repo.git": {
+         "last_cloned": "YYYY-MM-DD HH:MM:SS",
+         "last_updated": "YYYY-MM-DD HH:MM:SS",
+         "local_path": "data/repo.git",
+         "online_description": "...",
+         "status": "active"   # or "archived", "deleted", "error"
+      },
+      ...
+    }
+    """
+    if not os.path.isfile(CLONED_JSON_PATH):
+        return {}
+    try:
+        with open(CLONED_JSON_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+def save_cloned_info(data: dict):
+    """Writes out the updated dictionary to cloned_repos.json."""
+    with open(CLONED_JSON_PATH, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+def current_timestamp() -> str:
+    """Return current local time as a nice string."""
+    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+def get_online_repo_description(owner, repo_name):
+    """
+    Query GitHub API to fetch the description and archived/deleted status.
+    Returns a tuple: (description, is_archived, is_deleted)
+    """
+    api_url = f"https://api.github.com/repos/{owner}/{repo_name}"
+    try:
+        resp = requests.get(api_url, headers={"Accept": "application/vnd.github.v3+json"}, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            desc = data.get("description", "") or ""
+            archived = data.get("archived", False)
+            return (desc, archived, False)
+        elif resp.status_code == 404:
+            return ("", False, True)  # not found => deleted
+        else:
+            logging.warning(f"Unexpected status {resp.status_code} from GitHub for {owner}/{repo_name}")
+            return ("", False, False)
+    except requests.RequestException as e:
+        logging.warning(f"Failed to fetch {owner}/{repo_name}: {e}")
+        return ("", False, False)
+
+def clone_or_update_repo(repo_url: str):
+    """
+    Clone/pull the repo. Also fetch info from GitHub:
+      - description, archived/deleted => status
+    Save everything to cloned_repos.json
+    """
+    repos_data = load_cloned_info()
+    repo_name = repo_url.rstrip("/").split("/")[-1]  # e.g. 'my-repo.git'
+    repo_path = os.path.join(DATA_FOLDER, repo_name)
+
+    # Attempt to parse out owner/repo
+    parts = repo_url.replace("https://github.com/", "").split("/")
+    if len(parts) >= 2:
+        owner, raw_repo = parts[0], parts[1].replace(".git", "")
+        desc, is_arch, is_del = get_online_repo_description(owner, raw_repo)
+        if is_del:
+            status = "deleted"
+        elif is_arch:
+            status = "archived"
+        else:
+            status = "active"
+    else:
+        desc = ""
+        status = "error"
+
+    now = current_timestamp()
+    record = repos_data.get(repo_url, {
+        "last_cloned": "",
+        "last_updated": "",
+        "local_path": repo_path,
+        "online_description": desc,
+        "status": status,
+    })
+
+    # Overwrite these fields in case they've changed
+    record["online_description"] = desc
+    record["status"] = status
+    record["local_path"] = repo_path
+
+    # If not deleted, proceed to clone/pull
+    if status != "deleted":
+        if os.path.isdir(repo_path):
+            # do a pull
+            logging.info(f"Pulling updates for {repo_url}")
+            try:
+                subprocess.run(["git", "-C", repo_path, "pull"], check=True)
+                record["last_cloned"] = now
+                record["last_updated"] = now
+            except subprocess.CalledProcessError as e:
+                logging.error(f"Failed to pull {repo_url}: {e}")
+        else:
+            # clone new
+            logging.info(f"Cloning {repo_url} into {repo_path}")
+            os.makedirs(DATA_FOLDER, exist_ok=True)
+            try:
+                subprocess.run(["git", "clone", repo_url, repo_path], check=True)
+                record["last_cloned"] = now
+                record["last_updated"] = now
+            except subprocess.CalledProcessError as e:
+                logging.error(f"Failed to clone {repo_url}: {e}")
+    else:
+        logging.warning(f"Skipping clone - GitHub indicates {repo_url} is deleted.")
+
+    repos_data[repo_url] = record
+    save_cloned_info(repos_data)
+
+def detect_deleted_or_archived():
+    """
+    Loop over everything in cloned_repos.json and re-check if it's archived or deleted.
+    Update 'status' and 'online_description' accordingly.
+    """
+    repos_data = load_cloned_info()
+    changed = False
+    for repo_url, record in repos_data.items():
+        parts = repo_url.replace("https://github.com/", "").split("/")
+        if len(parts) < 2:
+            continue
+        owner, raw_repo = parts[0], parts[1].replace(".git", "")
+        desc, is_arch, is_del = get_online_repo_description(owner, raw_repo)
+        if is_del:
+            record["status"] = "deleted"
+        elif is_arch:
+            record["status"] = "archived"
+        else:
+            record["status"] = "active"
+        record["online_description"] = desc
+        changed = True
+
+    if changed:
+        save_cloned_info(repos_data)
+
+
+###############################################################################
+#                           WORKER THREAD
+###############################################################################
 
 class CloneWorker(QThread):
     """
-    Thread worker to clone or update a single repository.
-    Emits signals to update the GUI when finished or to display logs.
+    Runs clone_or_update_repo(repo_url) in the background.
+    We keep references to these threads in the GUI so they don't get GC'd.
     """
-    logSignal = pyqtSignal(str)
-    finishedSignal = pyqtSignal(str, str)  
-    # finishedSignal will emit (repo_url, status_message)
+    logSignal = pyqtSignal(str)    # to show logs in GUI
+    finishedSignal = pyqtSignal(str)  # emits repo_url when done
 
     def __init__(self, url, parent=None):
         super().__init__(parent)
@@ -51,24 +215,27 @@ class CloneWorker(QThread):
 
     def run(self):
         try:
-            self.logSignal.emit(f"Cloning/Updating: {self.url}")
-            clone_or_update_repo(self.url, base_path="data")
-            self.logSignal.emit(f"Finished cloning/updating: {self.url}")
-            status_msg = "Cloned/Updated"
+            self.logSignal.emit(f"Starting clone/update: {self.url}")
+            clone_or_update_repo(self.url)
+            self.logSignal.emit(f"Finished clone/update: {self.url}")
         except Exception as e:
-            status_msg = f"Error: {e}"
-            self.logSignal.emit(status_msg)
+            self.logSignal.emit(f"Error: {str(e)}")
 
-        self.finishedSignal.emit(self.url, status_msg)
+        self.finishedSignal.emit(self.url)
+
+
+###############################################################################
+#                          ARCHIVES DIALOG
+###############################################################################
 
 class ArchivedVersionsDialog(QDialog):
     """
-    Dialog to list and open archived versions for a given repository.
+    Lists & opens any "versions" archives for a given local repo folder.
     """
     def __init__(self, repo_path, parent=None):
         super().__init__(parent)
         self.repo_path = repo_path
-        self.setWindowTitle("Archived Versions - {}".format(os.path.basename(repo_path)))
+        self.setWindowTitle(f"Archived Versions - {os.path.basename(repo_path)}")
         self.resize(500, 300)
 
         layout = QVBoxLayout()
@@ -90,9 +257,8 @@ class ArchivedVersionsDialog(QDialog):
             item_path = os.path.join(versions_dir, item)
             if os.path.isdir(item_path):
                 self.archivesList.addItem(item)
-            else:
-                if item.endswith(".tar.xz"):
-                    self.archivesList.addItem(item)
+            elif item.endswith(".tar.xz"):
+                self.archivesList.addItem(item)
 
     def openSelectedArchive(self):
         selected_items = self.archivesList.selectedItems()
@@ -107,6 +273,7 @@ class ArchivedVersionsDialog(QDialog):
         if os.path.isdir(archive_path):
             self.openInFinder(archive_path)
         else:
+            # We assume it's a tar.xz
             temp_dir = tempfile.mkdtemp(prefix="repo_archive_")
             try:
                 subprocess.run(["tar", "-xJf", archive_path, "-C", temp_dir], check=True)
@@ -122,293 +289,230 @@ class ArchivedVersionsDialog(QDialog):
         else:
             subprocess.run(["xdg-open", path])
 
+
+###############################################################################
+#                               MAIN GUI
+###############################################################################
+
 class RepoSaverGUI(QWidget):
     """
-    Main GUI for GitHub Repo Saver:
-    - Table is updated row-by-row each time a single repo is cloned/updated.
-    - Single/Bulk Repo addition to 'main-links.txt'
-    - Then user can clone all repos from a specified .txt file or run archiver, etc.
+    Main GUI:
+    - Loads all repos from JSON on startup.
+    - Displays them in a table.
+    - Add new repo (in separate thread).
+    - Refresh statuses => re-check archived/deleted.
     """
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("GitHub Repo Saver - GUI")
+        self.setWindowTitle("GitHub Repo Saver - Single File")
+        self.threads = []  # keep references to CloneWorker threads
+        self.repoData = {}
         self.initUI()
+        self.loadRepos()  # auto-load from JSON
 
     def initUI(self):
         mainLayout = QVBoxLayout()
 
-        # File selection row
-        topLayout = QHBoxLayout()
-        self.instructionLabel = QLabel("Select the text file containing GitHub repo URLs:")
-        topLayout.addWidget(self.instructionLabel)
-
-        self.filePathEdit = QLineEdit()
-        self.filePathEdit.setPlaceholderText("Path to repo list (e.g., repos.txt)")
-        topLayout.addWidget(self.filePathEdit)
-
-        self.browseButton = QPushButton("Browse...")
-        self.browseButton.clicked.connect(self.browseFile)
-        topLayout.addWidget(self.browseButton)
-        mainLayout.addLayout(topLayout)
-
-        # Repo Table
+        # Table
         self.repoTable = QTableWidget()
-        self.repoTable.setColumnCount(8)
+        self.repoTable.setColumnCount(6)
         self.repoTable.setHorizontalHeaderLabels([
-            "URL",
+            "Repo URL",
             "Description",
             "Status",
             "Last Cloned",
-            "Last Archived",
-            "Open Folder",
-            "Archives",
-            "View README"
+            "Last Updated",
+            "Actions"
         ])
         self.repoTable.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         mainLayout.addWidget(self.repoTable)
 
-        # Control buttons (Load, Run, Refresh)
-        buttonLayout = QHBoxLayout()
-        self.loadButton = QPushButton("Clone Repos")
-        self.loadButton.clicked.connect(self.cloneReposFromFile)
-        buttonLayout.addWidget(self.loadButton)
+        # Add / Refresh
+        rowLayout = QHBoxLayout()
+        self.addRepoEdit = QLineEdit()
+        self.addRepoEdit.setPlaceholderText("Paste a GitHub repo URL (https://github.com/...)")
+        rowLayout.addWidget(self.addRepoEdit)
 
-        self.runButton = QPushButton("Run Archiver")
-        self.runButton.clicked.connect(self.runArchiver)
-        buttonLayout.addWidget(self.runButton)
+        self.addRepoBtn = QPushButton("Add Repo")
+        self.addRepoBtn.clicked.connect(self.addRepo)
+        rowLayout.addWidget(self.addRepoBtn)
 
-        self.refreshButton = QPushButton("Refresh Status")
-        self.refreshButton.clicked.connect(self.refreshStatus)
-        buttonLayout.addWidget(self.refreshButton)
-        mainLayout.addLayout(buttonLayout)
+        self.refreshBtn = QPushButton("Refresh Statuses")
+        self.refreshBtn.clicked.connect(self.refreshStatuses)
+        rowLayout.addWidget(self.refreshBtn)
 
-        # Add single/bulk
-        addRepoLayout = QHBoxLayout()
-        self.singleRepoEdit = QLineEdit()
-        self.singleRepoEdit.setPlaceholderText("Paste a single GitHub repo URL...")
-        addRepoLayout.addWidget(self.singleRepoEdit)
-
-        self.addRepoButton = QPushButton("Add Single Repo")
-        self.addRepoButton.clicked.connect(self.addSingleRepo)
-        addRepoLayout.addWidget(self.addRepoButton)
-
-        self.bulkUploadButton = QPushButton("Bulk Upload (.txt)")
-        self.bulkUploadButton.clicked.connect(self.bulkUploadRepos)
-        addRepoLayout.addWidget(self.bulkUploadButton)
-
-        mainLayout.addLayout(addRepoLayout)
+        mainLayout.addLayout(rowLayout)
 
         # Logging
-        self.logTextEdit = QTextEdit()
-        self.logTextEdit.setReadOnly(True)
-        mainLayout.addWidget(self.logTextEdit)
+        self.logText = QTextEdit()
+        self.logText.setReadOnly(True)
+        mainLayout.addWidget(self.logText)
 
         self.setLayout(mainLayout)
-        self.resize(1200, 600)
+        self.resize(1100, 600)
 
-    def browseFile(self):
-        dialog = QFileDialog(self, "Open Repo List", os.getcwd(), "Text Files (*.txt)")
-        if dialog.exec_():
-            selected = dialog.selectedFiles()
-            if selected:
-                self.filePathEdit.setText(selected[0])
+    def loadRepos(self):
+        """Load from JSON and populate the table."""
+        self.repoData = load_cloned_info()
+        self.populateTable()
 
-    def cloneReposFromFile(self):
-        """
-        Read lines from self.filePathEdit, for each valid repo, spawn a worker thread
-        to clone/update. As each completes, we add a row to the table.
-        """
-        path = self.filePathEdit.text().strip()
-        if not path or not os.path.isfile(path):
-            QMessageBox.warning(self, "Invalid File", "Please specify a valid repo list file path.")
-            return
-
-        # Clear the table for a fresh start
+    def populateTable(self):
         self.repoTable.setRowCount(0)
+        for repo_url, info in self.repoData.items():
+            self.addTableRow(repo_url, info)
 
-        with open(path, "r", encoding="utf-8") as f:
-            lines = [ln.strip() for ln in f if ln.strip()]
+    def addTableRow(self, repo_url, info):
+        row_idx = self.repoTable.rowCount()
+        self.repoTable.insertRow(row_idx)
 
-        # Start a worker for each line
-        for url in lines:
-            if not url.endswith(".git"):
-                url += ".git"
+        # URL
+        item_url = QTableWidgetItem(repo_url)
+        self.repoTable.setItem(row_idx, 0, item_url)
 
-            if validate_repo_url(url):
-                worker = CloneWorker(url)
-                worker.logSignal.connect(self.appendLog)
-                worker.finishedSignal.connect(self.cloneFinished)
-                worker.start()
-            else:
-                self.logTextEdit.append(f"Invalid URL skipped: {url}")
+        # Description
+        desc = info.get("online_description", "")
+        item_desc = QTableWidgetItem(desc)
+        self.repoTable.setItem(row_idx, 1, item_desc)
 
-    def cloneFinished(self, url, statusMsg):
-        """
-        Called when a single repo clone/update operation finishes.
-        We'll insert a new row with the relevant info.
-        """
-        rowIndex = self.repoTable.rowCount()
-        self.repoTable.insertRow(rowIndex)
+        # Status
+        status = info.get("status", "")
+        item_status = QTableWidgetItem(status)
+        self.repoTable.setItem(row_idx, 2, item_status)
 
-        # Basic columns
-        self.repoTable.setItem(rowIndex, 0, QTableWidgetItem(url))  # URL
-        self.repoTable.setItem(rowIndex, 1, QTableWidgetItem(""))   # Description (placeholder)
-        self.repoTable.setItem(rowIndex, 2, QTableWidgetItem(statusMsg))  # Status
+        # Last Cloned
+        last_cloned = info.get("last_cloned", "")
+        item_cloned = QTableWidgetItem(last_cloned)
+        self.repoTable.setItem(row_idx, 3, item_cloned)
 
-        # Evaluate lastCloned, lastArchived
-        lastCloned, lastArchived = self.getLocalRepoTimestamps(url)
-        self.repoTable.setItem(rowIndex, 3, QTableWidgetItem(lastCloned))
-        self.repoTable.setItem(rowIndex, 4, QTableWidgetItem(lastArchived))
+        # Last Updated
+        last_updated = info.get("last_updated", "")
+        item_updated = QTableWidgetItem(last_updated)
+        self.repoTable.setItem(row_idx, 4, item_updated)
 
-        # Add buttons
-        btn_open = QPushButton("Open Folder")
-        btn_open.clicked.connect(lambda _, u=url: self.openRepoFolder(u))
-        self.repoTable.setCellWidget(rowIndex, 5, btn_open)
+        # Actions: open folder, archives, README
+        actionLayout = QHBoxLayout()
+        btn_open = QPushButton("Folder")
+        btn_open.clicked.connect(lambda _, url=repo_url: self.openRepoFolder(url))
+        actionLayout.addWidget(btn_open)
 
         btn_arch = QPushButton("Archives")
-        btn_arch.clicked.connect(lambda _, u=url: self.showArchives(u))
-        self.repoTable.setCellWidget(rowIndex, 6, btn_arch)
+        btn_arch.clicked.connect(lambda _, url=repo_url: self.showArchives(url))
+        actionLayout.addWidget(btn_arch)
 
-        btn_readme = QPushButton("View README")
-        btn_readme.clicked.connect(lambda _, u=url: self.viewReadme(u))
-        self.repoTable.setCellWidget(rowIndex, 7, btn_readme)
+        btn_readme = QPushButton("README")
+        btn_readme.clicked.connect(lambda _, url=repo_url: self.viewReadme(url))
+        actionLayout.addWidget(btn_readme)
 
-    def getLocalRepoTimestamps(self, repo_url):
-        """
-        Check if local folder is present, return lastCloned & lastArchived.
-        """
-        repo_name = repo_url.rstrip("/").split("/")[-1]
-        repo_path = os.path.join("data", repo_name)
+        widget = QWidget()
+        widget.setLayout(actionLayout)
+        self.repoTable.setCellWidget(row_idx, 5, widget)
 
-        if os.path.isdir(repo_path):
-            last_cloned_dt = datetime.fromtimestamp(os.path.getmtime(repo_path))
-            lastCloned = last_cloned_dt.strftime("%Y-%m-%d %H:%M:%S")
-
-            versions_path = os.path.join(repo_path, "versions")
-            if os.path.isdir(versions_path):
-                latest_time = None
-                for item in os.listdir(versions_path):
-                    item_path = os.path.join(versions_path, item)
-                    t = os.path.getmtime(item_path)
-                    if latest_time is None or t > latest_time:
-                        latest_time = t
-                if latest_time:
-                    lastArchived = datetime.fromtimestamp(latest_time).strftime("%Y-%m-%d %H:%M:%S")
-                else:
-                    lastArchived = ""
-            else:
-                lastArchived = ""
-        else:
-            lastCloned = ""
-            lastArchived = ""
-
-        return lastCloned, lastArchived
-
-    def addSingleRepo(self):
-        """
-        Read the single URL from self.singleRepoEdit, append it to main-links.txt if unique.
-        """
-        url = self.singleRepoEdit.text().strip()
+    def addRepo(self):
+        """Add a new repo based on user input, clone it in background."""
+        url = self.addRepoEdit.text().strip()
         if not url:
             QMessageBox.warning(self, "No URL", "Please enter a GitHub repo URL.")
             return
-        if not url.startswith("https://github.com/"):
-            QMessageBox.warning(self, "Invalid URL", "URL must start with https://github.com/")
+        if not validate_repo_url(url):
+            QMessageBox.warning(self, "Invalid URL", "Must start with https://github.com/")
+            return
+        if not url.endswith(".git"):
+            url += ".git"
+
+        # Check if already in JSON
+        if url in self.repoData:
+            QMessageBox.information(self, "Duplicate", "That repo is already in cloned_repos.json.")
             return
 
-        # We'll store the repos in 'main-links.txt' (feel free to rename if needed)
-        links_path = os.path.join(os.path.dirname(__file__), "main-links.txt")
-        if not os.path.isfile(links_path):
-            open(links_path, "w").close()
+        # Create an entry in memory and JSON
+        self.repoData[url] = {
+            "last_cloned": "",
+            "last_updated": "",
+            "local_path": os.path.join(DATA_FOLDER, url.split("/")[-1]),
+            "online_description": "",
+            "status": "pending",
+        }
+        save_cloned_info(self.repoData)
 
-        with open(links_path, "r", encoding="utf-8") as f:
-            existing_lines = [ln.strip() for ln in f if ln.strip()]
+        # Show in table immediately
+        self.addTableRow(url, self.repoData[url])
+        self.addRepoEdit.clear()
 
-        if url in existing_lines:
-            QMessageBox.information(self, "Duplicate", "That repo URL already exists.")
-            return
+        # Spawn a worker to actually do the clone/update
+        worker = CloneWorker(url)
+        self.threads.append(worker)  # keep reference
+        worker.logSignal.connect(self.appendLog)
+        worker.finishedSignal.connect(self.cloneFinished)
+        worker.start()
 
-        with open(links_path, "a", encoding="utf-8") as f:
-            f.write(url + "\n")
+    def cloneFinished(self, repo_url):
+        """Triggered when the background clone finishes. Update that row's data."""
+        self.appendLog(f"Clone finished for: {repo_url}")
+        # reload from JSON to see updated fields
+        self.repoData = load_cloned_info()
+        self.updateRowForRepo(repo_url)
 
-        self.logTextEdit.append(f"Added single repo: {url} to main-links.txt")
-        self.singleRepoEdit.clear()
+        # We can remove the worker from self.threads if we want
+        # so it doesn't accumulate forever
+        # (only do so after it's actually finished).
+        # Since we have the url, we can find which worker in self.threads
+        # if that matters. Or do:
+        # self.threads = [t for t in self.threads if t is not sender]
 
-    def bulkUploadRepos(self):
-        """
-        Prompt for a .txt file, read each line, skip duplicates, append to main-links.txt
-        """
-        dialog = QFileDialog(self, "Select .txt file with repo URLs", os.getcwd(), "Text Files (*.txt)")
-        if dialog.exec_():
-            selected = dialog.selectedFiles()
-            if not selected:
-                return
-            bulk_file = selected[0]
+    def updateRowForRepo(self, repo_url):
+        """Refresh the row in the table for the given repo_url."""
+        row_count = self.repoTable.rowCount()
+        info = self.repoData.get(repo_url, {})
+        for row in range(row_count):
+            cell = self.repoTable.item(row, 0)
+            if cell and cell.text() == repo_url:
+                self.repoTable.item(row, 1).setText(info.get("online_description", ""))
+                self.repoTable.item(row, 2).setText(info.get("status", ""))
+                self.repoTable.item(row, 3).setText(info.get("last_cloned", ""))
+                self.repoTable.item(row, 4).setText(info.get("last_updated", ""))
+                break
 
-            if not os.path.isfile(bulk_file):
-                QMessageBox.warning(self, "File Error", "Selected file not found.")
-                return
-
-            links_path = os.path.join(os.path.dirname(__file__), "main-links.txt")
-            if not os.path.isfile(links_path):
-                open(links_path, "w").close()
-
-            with open(links_path, "r", encoding="utf-8") as lf:
-                existing_lines = [ln.strip() for ln in lf if ln.strip()]
-
-            with open(bulk_file, "r", encoding="utf-8") as bf:
-                lines_to_add = [ln.strip() for ln in bf if ln.strip()]
-
-            added_count = 0
-            with open(links_path, "a", encoding="utf-8") as lf:
-                for line in lines_to_add:
-                    if line not in existing_lines and line.startswith("https://github.com/"):
-                        lf.write(line + "\n")
-                        existing_lines.append(line)
-                        added_count += 1
-
-            self.logTextEdit.append(f"Bulk upload complete. Added {added_count} new repos to main-links.txt")
+    def refreshStatuses(self):
+        """Re-check archived/deleted status for all repos."""
+        self.captureLogs()
+        detect_deleted_or_archived()
+        self.repoData = load_cloned_info()
+        self.populateTable()
+        self.appendLog("Refreshed repo statuses.\n")
 
     def openRepoFolder(self, repo_url):
-        """
-        Open the local folder for the specified repo if it exists.
-        """
-        repo_name = repo_url.rstrip("/").split("/")[-1]
-        repo_path = os.path.join("data", repo_name)
-        if os.path.isdir(repo_path):
-            self.openInFinder(repo_path)
+        info = self.repoData.get(repo_url, {})
+        local_path = info.get("local_path", "")
+        if local_path and os.path.isdir(local_path):
+            self.openInFinder(local_path)
         else:
-            QMessageBox.information(self, "Folder Not Found", f"No folder found for {repo_url}")
+            QMessageBox.information(self, "Folder Not Found", f"No local folder for {repo_url}")
 
     def showArchives(self, repo_url):
-        """
-        Show archived versions for the selected repo in a dialog.
-        """
-        repo_name = repo_url.rstrip("/").split("/")[-1]
-        repo_path = os.path.join("data", repo_name)
-        if not os.path.isdir(repo_path):
-            QMessageBox.information(self, "Repo Not Found", "Clone/Update the repo first.")
+        info = self.repoData.get(repo_url, {})
+        local_path = info.get("local_path", "")
+        if not local_path or not os.path.isdir(local_path):
+            QMessageBox.information(self, "Repo Not Found", "Clone the repo first.")
             return
-
-        dlg = ArchivedVersionsDialog(repo_path, self)
+        dlg = ArchivedVersionsDialog(local_path, self)
         dlg.exec_()
 
     def viewReadme(self, repo_url):
-        """
-        If README.md is present, display its contents in a dialog.
-        """
-        repo_name = repo_url.rstrip("/").split("/")[-1]
-        repo_path = os.path.join("data", repo_name)
-        readme_path = os.path.join(repo_path, "README.md")
+        info = self.repoData.get(repo_url, {})
+        local_path = info.get("local_path", "")
+        if not local_path or not os.path.isdir(local_path):
+            QMessageBox.information(self, "Repo Not Found", "Clone the repo first.")
+            return
+        readme_path = os.path.join(local_path, "README.md")
         if not os.path.isfile(readme_path):
-            QMessageBox.information(self, "No README Found", "No README.md found.")
+            QMessageBox.information(self, "No README", "No README.md found.")
             return
 
         with open(readme_path, "r", encoding="utf-8", errors="ignore") as f:
             content = f.read()
 
         dlg = QDialog(self)
-        dlg.setWindowTitle(f"README - {repo_name}")
+        dlg.setWindowTitle(f"README - {os.path.basename(local_path)}")
         layout = QVBoxLayout()
         txt = QTextEdit()
         txt.setReadOnly(True)
@@ -418,85 +522,26 @@ class RepoSaverGUI(QWidget):
         dlg.resize(600, 400)
         dlg.exec_()
 
-    def runArchiver(self):
-        """
-        Calls the archiver logic via 'github_repo_saver.py --repo-list <path>'.
-        """
-        path = self.filePathEdit.text().strip()
-        if not path or not os.path.isfile(path):
-            QMessageBox.warning(self, "Invalid File", "Please specify a valid repo list file path.")
-            return
-
-        self.captureLogs()
-        self.logTextEdit.append("Running archiver on all valid repos...")
-
-        saved_argv = sys.argv
-        try:
-            # Rebuild sys.argv to emulate command line usage
-            sys.argv = ["github_repo_saver_gui.py", "--repo-list", path]
-            run_archiver()
-        except Exception as e:
-            logging.error(f"Error running archiver: {e}")
-        finally:
-            sys.argv = saved_argv
-
-        self.logTextEdit.append("Archiver completed.\n")
-        self.refreshStatus()
-
-    def refreshStatus(self):
-        """
-        For each row in the table, re-check lastCloned/lastArchived. 
-        Then check if archived or deleted on GitHub.
-        """
-        self.captureLogs()
-
-        # Gather all repos from the table
-        row_count = self.repoTable.rowCount()
-        urls = []
-        for row in range(row_count):
-            item = self.repoTable.item(row, 0)
-            if item:
-                urls.append(item.text())
-
-        # Refresh local info in the table
-        for row in range(row_count):
-            item = self.repoTable.item(row, 0)
-            if not item:
-                continue
-            url = item.text()
-            lastCloned, lastArchived = self.getLocalRepoTimestamps(url)
-            self.repoTable.setItem(row, 3, QTableWidgetItem(lastCloned))
-            self.repoTable.setItem(row, 4, QTableWidgetItem(lastArchived))
-
-        # Check archived/deleted in remote
-        detect_deleted_or_archived(urls)
-
-        self.logTextEdit.append("Refreshed repo statuses.\n")
+    def appendLog(self, msg):
+        self.logText.append(msg)
 
     def captureLogs(self):
         """
-        Direct logging output to self.logTextEdit.
+        Route standard logging to the text box.
         """
         logging.getLogger().handlers = []
-
-        class LogCaptureHandler(logging.Handler):
+        class LogHandler(logging.Handler):
             def emit(self2, record):
-                msg = self2.format(record)
-                self.logTextEdit.append(msg)
+                self.logText.append(self2.format(record))
 
-        handler = LogCaptureHandler()
-        handler.setFormatter(
-            logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", 
-                              datefmt="%Y-%m-%d %H:%M:%S"))
-        logging.getLogger().setLevel(logging.INFO)
+        handler = LogHandler()
+        handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
         logging.getLogger().addHandler(handler)
-
-    def appendLog(self, text):
-        self.logTextEdit.append(text)
+        logging.getLogger().setLevel(logging.INFO)
 
     def openInFinder(self, path):
         """
-        Cross-platform way to open a path in the default file explorer.
+        Cross-platform open folder.
         """
         if sys.platform.startswith("darwin"):
             subprocess.run(["open", path])
@@ -505,8 +550,26 @@ class RepoSaverGUI(QWidget):
         else:
             subprocess.run(["xdg-open", path])
 
+    def closeEvent(self, event):
+        """
+        Try to ensure no active threads are running to avoid
+        QThread: Destroyed while thread is still running error.
+        """
+        still_running = [t for t in self.threads if t.isRunning()]
+        if still_running:
+            # Optionally, ask user or forcibly wait
+            for t in still_running:
+                t.quit()
+                t.wait()  # wait for them to clean up
+        super().closeEvent(event)
+
+
+###############################################################################
+#                               MAIN ENTRY
+###############################################################################
 
 def main():
+    setup_logging()
     app = QApplication(sys.argv)
     gui = RepoSaverGUI()
     gui.show()

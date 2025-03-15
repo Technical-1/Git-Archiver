@@ -12,3 +12,6 @@ __pycache__/
 .DS_Store
 links.txt
 src/main-links.txt
+cloned_repos.json
+
+data/*

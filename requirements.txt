@@ -1,0 +1,9 @@
+# Requirements for GitHub Repo Saver
+
+# For example:
+# schedule==1.1.0
+# GitPython==3.1.31
+# requests==2.31.0
+# python-dotenv==1.0.0
+# Any compression libs you'd like:
+# py-zstd==0.15.6

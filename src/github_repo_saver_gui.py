@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
-Single-file GitHub Repo Saver with PyQt:
+Single-file GitHub Repo Saver with PyQt (FIXED JSON ADDING):
 - JSON-based storage (cloned_repos.json) tracks repos and metadata.
-- Adds new repos (single or bulk from .txt), clones/updates them in threads.
-- If `git pull` actually fetches new commits, we create a timestamped archive.
-- Table columns: URL, Description, Status, Last Cloned, Last Updated, and individual columns for:
-    "Open Folder", "Archives", "README" => so the buttons don't get cut off.
-- Also a "Bulk Upload" button that loads a .txt of multiple repos.
+- Adds new repos (single or bulk from .txt) in threads; each does 'clone or pull'.
+- If 'git pull' actually fetches new commits, we create a timestamped archive.
+- Table columns: URL, Description, Status, Last Cloned, Last Updated,
+  plus separate columns for Folder, Archives, README (so buttons don't get cut off).
+- Bulk Upload always spawns a clone/pull for each line, even if it's already in JSON.
+
+**Fix**: Always reload the existing JSON in memory before adding new repos, so we don't overwrite old data.
 
 Dependencies:
     pip install pyqt5 requests
@@ -48,9 +50,7 @@ def setup_logging():
 
 
 def validate_repo_url(url: str) -> bool:
-    """
-    Basic check: must start with https://github.com/
-    """
+    """Basic check: must start with https://github.com/"""
     return url.startswith("https://github.com/")
 
 
@@ -78,9 +78,7 @@ def load_cloned_info() -> dict:
 
 
 def save_cloned_info(data: dict):
-    """
-    Write the updated dictionary to 'cloned_repos.json'
-    """
+    """Write the updated dictionary to 'cloned_repos.json'."""
     with open(CLONED_JSON_PATH, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
@@ -121,10 +119,7 @@ def create_versioned_archive(repo_path: str):
     versions_folder = os.path.join(repo_path, "versions")
     os.makedirs(versions_folder, exist_ok=True)
 
-    # We'll copy the entire repo into a subfolder first if you like, or just tar directly.
-    # For simplicity, let's just tar the current repo. Use 'cp -r' if you prefer a subfolder snapshot.
     archive_path = os.path.join(versions_folder, f"{timestamp}.tar.xz")
-
     logging.info(f"Creating new archive: {archive_path}")
     try:
         subprocess.run(["tar", "-cJf", archive_path, "-C", repo_path, "."], check=True)
@@ -137,8 +132,8 @@ def clone_or_update_repo(repo_url: str):
     - Load existing JSON record (or create a new one).
     - Check GitHub for description/archived/deleted -> 'status'.
     - If not "deleted", clone or pull.
-      - If new commits are actually pulled, do an archive.
-      - If brand-new clone, optionally archive as an initial snapshot.
+      - If new commits are actually pulled, we archive.
+      - If brand-new clone, we also archive once.
     - Save JSON updates.
     """
     repos_data = load_cloned_info()
@@ -191,7 +186,7 @@ def clone_or_update_repo(repo_url: str):
                 # Check if we actually got new commits
                 pull_out = pull_proc.stdout.lower()
                 if "already up to date" not in pull_out and "up to date" not in pull_out:
-                    # We appear to have new commits
+                    # We appear to have new commits => archive
                     create_versioned_archive(repo_path)
             else:
                 logging.error(f"Failed to pull {repo_url}: {pull_proc.stdout}")
@@ -204,12 +199,10 @@ def clone_or_update_repo(repo_url: str):
             if clone_proc.returncode == 0:
                 record["last_cloned"] = now
                 record["last_updated"] = now
-
-                # Optionally do an immediate initial archive:
+                # Also do an immediate initial archive
                 create_versioned_archive(repo_path)
             else:
                 logging.error(f"Failed to clone {repo_url}: {clone_proc.stdout}")
-
     else:
         logging.warning(f"Skipping clone - GitHub indicates {repo_url} is deleted.")
 
@@ -346,17 +339,20 @@ class RepoSaverGUI(QWidget):
        2: Status
        3: Last Cloned
        4: Last Updated
-       5: "Open Folder" button
-       6: "Archives" button
-       7: "README" button
-    - Add new repo (single or bulk from .txt).
+       5: "Open Folder"
+       6: "Archives"
+       7: "README"
+    - Add new repo (single or from bulk .txt).
+    - For Bulk Upload, we *always* spawn a thread for *each line*, even if it
+      already exists in JSON => ensures 'git pull' + archive if new commits appear.
+    - **Key Fix**: Before adding new repos (single or bulk), we reload from JSON
+      to preserve any existing repos that might not be in `self.repoData`.
     - Refresh statuses => re-check archived/deleted from GitHub.
-    - Archives automatically created after new commits are fetched.
     """
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("GitHub Repo Saver (Single-file)")
+        self.setWindowTitle("GitHub Repo Saver (Single-file, Bulk Fix, JSON Merging)")
         self.threads = []  # Keep references to background CloneWorker threads
         self.repoData = {}
         self.initUI()
@@ -420,22 +416,22 @@ class RepoSaverGUI(QWidget):
             self.addTableRow(repo_url, info)
 
     def addTableRow(self, repo_url, info):
+        """
+        Insert a row in the QTableWidget for the given repo.
+        """
         row_idx = self.repoTable.rowCount()
         self.repoTable.insertRow(row_idx)
 
         # 0. Repo URL
-        item_url = QTableWidgetItem(repo_url)
-        self.repoTable.setItem(row_idx, 0, item_url)
+        self.repoTable.setItem(row_idx, 0, QTableWidgetItem(repo_url))
 
         # 1. Description
         desc = info.get("online_description", "")
-        item_desc = QTableWidgetItem(desc)
-        self.repoTable.setItem(row_idx, 1, item_desc)
+        self.repoTable.setItem(row_idx, 1, QTableWidgetItem(desc))
 
         # 2. Status
         status = info.get("status", "")
-        item_status = QTableWidgetItem(status)
-        self.repoTable.setItem(row_idx, 2, item_status)
+        self.repoTable.setItem(row_idx, 2, QTableWidgetItem(status))
 
         # 3. Last Cloned
         last_cloned = info.get("last_cloned", "")
@@ -447,21 +443,21 @@ class RepoSaverGUI(QWidget):
 
         # 5. "Open Folder" button
         btn_folder = QPushButton("Folder")
-        btn_folder.clicked.connect(lambda _, url=repo_url: self.openRepoFolder(url))
+        btn_folder.clicked.connect(lambda _, u=repo_url: self.openRepoFolder(u))
         self.repoTable.setCellWidget(row_idx, 5, btn_folder)
 
         # 6. "Archives" button
         btn_arch = QPushButton("Archives")
-        btn_arch.clicked.connect(lambda _, url=repo_url: self.showArchives(url))
+        btn_arch.clicked.connect(lambda _, u=repo_url: self.showArchives(u))
         self.repoTable.setCellWidget(row_idx, 6, btn_arch)
 
         # 7. "README" button
         btn_readme = QPushButton("README")
-        btn_readme.clicked.connect(lambda _, url=repo_url: self.viewReadme(url))
+        btn_readme.clicked.connect(lambda _, u=repo_url: self.viewReadme(u))
         self.repoTable.setCellWidget(row_idx, 7, btn_readme)
 
     def addRepo(self):
-        """Add a single repo from the text field."""
+        """Add a single repo from the text field, preserving old data in JSON."""
         url = self.addRepoEdit.text().strip()
         if not url:
             QMessageBox.warning(self, "No URL", "Please enter a GitHub repo URL.")
@@ -472,36 +468,35 @@ class RepoSaverGUI(QWidget):
         if not url.endswith(".git"):
             url += ".git"
 
-        # Check if already in JSON
-        if url in self.repoData:
-            QMessageBox.information(self, "Duplicate", "That repo is already in cloned_repos.json.")
-            return
+        # **Reload** the JSON so we don't lose existing data
+        all_data = load_cloned_info()
 
-        # Insert a placeholder in memory
-        self.repoData[url] = {
-            "last_cloned": "",
-            "last_updated": "",
-            "local_path": os.path.join(DATA_FOLDER, url.split("/")[-1]),
-            "online_description": "",
-            "status": "pending"
-        }
-        save_cloned_info(self.repoData)
+        # If brand-new, add an entry
+        if url not in all_data:
+            all_data[url] = {
+                "last_cloned": "",
+                "last_updated": "",
+                "local_path": os.path.join(DATA_FOLDER, url.split("/")[-1]),
+                "online_description": "",
+                "status": "pending"
+            }
+            save_cloned_info(all_data)
+            # Also update self.repoData in memory
+            self.repoData = all_data
+            # Add a table row for the new entry
+            self.addTableRow(url, all_data[url])
 
-        # Add row
-        self.addTableRow(url, self.repoData[url])
         self.addRepoEdit.clear()
 
-        # Clone in background
-        worker = CloneWorker(url)
-        self.threads.append(worker)  # keep reference
-        worker.logSignal.connect(self.appendLog)
-        worker.finishedSignal.connect(self.cloneFinished)
-        worker.start()
+        # Spawn a thread for clone/pull
+        self.spawnCloneThread(url)
 
     def bulkUpload(self):
         """
-        Prompt for a .txt file, read each line as a GitHub URL, skip duplicates,
-        and process similarly to addRepo.
+        Prompt for a .txt file, read each line as a GitHub URL.
+        Reload the existing JSON first to preserve old data.
+        Then for each line, if it's brand new, add it.
+        Then spawn a worker for every line (even if it existed).
         """
         dlg = QFileDialog(self, "Select .txt file with GitHub URLs", os.getcwd(), "Text Files (*.txt)")
         if dlg.exec_():
@@ -513,6 +508,9 @@ class RepoSaverGUI(QWidget):
                 QMessageBox.warning(self, "File Error", "Selected file not found.")
                 return
 
+            # Reload existing JSON so we don't overwrite older entries
+            all_data = load_cloned_info()
+
             with open(txt_file, "r", encoding="utf-8") as f:
                 lines = [ln.strip() for ln in f if ln.strip()]
 
@@ -523,9 +521,10 @@ class RepoSaverGUI(QWidget):
                     continue
                 if not url.endswith(".git"):
                     url += ".git"
-                if url not in self.repoData:
-                    # Create a placeholder
-                    self.repoData[url] = {
+
+                # If brand new, add an entry
+                if url not in all_data:
+                    all_data[url] = {
                         "last_cloned": "",
                         "last_updated": "",
                         "local_path": os.path.join(DATA_FOLDER, url.split("/")[-1]),
@@ -533,18 +532,32 @@ class RepoSaverGUI(QWidget):
                         "status": "pending"
                     }
                     added_count += 1
-                    # Show row
-                    self.addTableRow(url, self.repoData[url])
-                    # Spawn clone
-                    worker = CloneWorker(url)
-                    self.threads.append(worker)
-                    worker.logSignal.connect(self.appendLog)
-                    worker.finishedSignal.connect(self.cloneFinished)
-                    worker.start()
 
-            save_cloned_info(self.repoData)
-            self.appendLog(f"Bulk upload added {added_count} new repos.\n")
+            # Save the merged data
+            save_cloned_info(all_data)
+            # Also update our in-memory store and table
+            self.repoData = all_data
+            self.populateTable()  # re-draw table with all updates
 
+            # Now spawn a worker to do the actual clone/pull for *each* line (even duplicates)
+            for line in lines:
+                url = line
+                if not validate_repo_url(url):
+                    continue
+                if not url.endswith(".git"):
+                    url += ".git"
+                # Fire a worker
+                self.spawnCloneThread(url)
+
+            self.appendLog(f"Bulk upload processed {len(lines)} lines. Added {added_count} new repos.\n")
+
+    def spawnCloneThread(self, repo_url):
+        """Create a CloneWorker for the given repo_url, ensuring a pull + archive."""
+        worker = CloneWorker(repo_url)
+        self.threads.append(worker)  # keep a reference
+        worker.logSignal.connect(self.appendLog)
+        worker.finishedSignal.connect(self.cloneFinished)
+        worker.start()
 
     def cloneFinished(self, repo_url):
         """
@@ -561,16 +574,14 @@ class RepoSaverGUI(QWidget):
         for r in range(row_count):
             cell = self.repoTable.item(r, 0)
             if cell and cell.text() == repo_url:
-                self.repoTable.item(r, 1).setText(info.get("online_description", ""))
-                self.repoTable.item(r, 2).setText(info.get("status", ""))
-                self.repoTable.item(r, 3).setText(info.get("last_cloned", ""))
-                self.repoTable.item(r, 4).setText(info.get("last_updated", ""))
+                self.repoTable.setItem(r, 1, QTableWidgetItem(info.get("online_description", "")))
+                self.repoTable.setItem(r, 2, QTableWidgetItem(info.get("status", "")))
+                self.repoTable.setItem(r, 3, QTableWidgetItem(info.get("last_cloned", "")))
+                self.repoTable.setItem(r, 4, QTableWidgetItem(info.get("last_updated", "")))
                 break
 
     def refreshStatuses(self):
-        """
-        Re-check archived/deleted status for all repos in JSON, update table.
-        """
+        """Re-check archived/deleted status for all repos in JSON, update table."""
         self.captureLogs()
         detect_deleted_or_archived()
         self.repoData = load_cloned_info()

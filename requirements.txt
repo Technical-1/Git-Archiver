@@ -1,9 +1,5 @@
-# Requirements for GitHub Repo Saver
+# Python requirements for the GitHub Repo Saver single-file app
+# Install via: pip install -r requirements.txt
 
-# For example:
-# schedule==1.1.0
-# GitPython==3.1.31
-# requests==2.31.0
-# python-dotenv==1.0.0
-# Any compression libs you'd like:
-# py-zstd==0.15.6
+PyQt5
+requests

@@ -26,17 +26,16 @@ import threading
 import queue
 from concurrent.futures import ThreadPoolExecutor
 
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QRect, QPoint, QEventLoop
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QRect, QPoint, QEvent
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
     QTableWidget, QTableWidgetItem, QHeaderView,
     QPushButton, QLabel, QLineEdit, QTextEdit, QMessageBox,
     QDialog, QListWidget, QListWidgetItem, QFileDialog,
     QDialog, QVBoxLayout, QHBoxLayout, QWidget, QProgressBar, QStatusBar,
-    QToolTip, QMenu, QAction, QAbstractItemView, QMainWindow, QSystemTrayIcon,
-    QProgressDialog
+    QToolTip
 )
-from PyQt5.QtGui import QColor, QCursor, QIcon
+from PyQt5.QtGui import QColor, QCursor
 
 
 ###############################################################################
@@ -186,8 +185,6 @@ def clone_or_update_repo(repo_url: str):
       - If new commits are actually pulled, we archive.
       - If brand-new clone, we also archive once.
     - Save JSON updates.
-    
-    Returns: True if successful, False if there was an error
     """
     repos_data = load_cloned_info()
     repo_name = repo_url.rstrip("/").split("/")[-1]  # e.g. "some-repo.git"
@@ -207,19 +204,6 @@ def clone_or_update_repo(repo_url: str):
     else:
         desc = ""
         status = "error"
-        logging.error(f"Invalid repository URL format: {repo_url}")
-        
-        # Update record with error status
-        record = repos_data.get(repo_url, {
-            "last_cloned": "",
-            "last_updated": "",
-            "local_path": repo_path,
-            "online_description": "Invalid URL format",
-            "status": "error",
-        })
-        repos_data[repo_url] = record
-        save_cloned_info(repos_data)
-        return False
 
     now = current_timestamp()
     record = repos_data.get(repo_url, {
@@ -233,86 +217,47 @@ def clone_or_update_repo(repo_url: str):
     record["online_description"] = desc
     record["status"] = status
     record["local_path"] = repo_path
-    
-    success = True
 
     if status != "deleted":
         # If local folder exists, do a pull
         if os.path.isdir(repo_path):
             logging.info(f"Pulling updates for {repo_url}")
-            try:
-                pull_proc = subprocess.run(
-                    ["git", "-C", repo_path, "pull"],
-                    check=False,  # handle errors ourselves
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    timeout=300  # 5 minute timeout
-                )
-                if pull_proc.returncode == 0:
-                    record["last_cloned"] = now
-                    record["last_updated"] = now
+            pull_proc = subprocess.run(
+                ["git", "-C", repo_path, "pull"],
+                check=False,  # handle errors ourselves
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True
+            )
+            if pull_proc.returncode == 0:
+                record["last_cloned"] = now
+                record["last_updated"] = now
 
-                    # Check if we actually got new commits
-                    pull_out = pull_proc.stdout.lower()
-                    if "already up to date" not in pull_out and "up to date" not in pull_out:
-                        # We appear to have new commits => archive
-                        create_versioned_archive(repo_path)
-                else:
-                    logging.error(f"Failed to pull {repo_url}: {pull_proc.stdout}")
-                    record["status"] = "error"
-                    record["online_description"] = f"Pull error: {pull_proc.stdout[:100]}"
-                    success = False
-            except subprocess.TimeoutExpired:
-                logging.error(f"Timeout pulling {repo_url}")
-                record["status"] = "error"
-                record["online_description"] = "Pull timed out after 5 minutes"
-                success = False
-            except Exception as e:
-                logging.error(f"Exception during pull for {repo_url}: {str(e)}")
-                record["status"] = "error"
-                record["online_description"] = f"Pull exception: {str(e)[:100]}"
-                success = False
+                # Check if we actually got new commits
+                pull_out = pull_proc.stdout.lower()
+                if "already up to date" not in pull_out and "up to date" not in pull_out:
+                    # We appear to have new commits => archive
+                    create_versioned_archive(repo_path)
+            else:
+                logging.error(f"Failed to pull {repo_url}: {pull_proc.stdout}")
         else:
             # clone new
             logging.info(f"Cloning {repo_url} -> {repo_path}")
-            try:
-                os.makedirs(DATA_FOLDER, exist_ok=True)
-                clone_proc = subprocess.run(
-                    ["git", "clone", repo_url, repo_path],
-                    check=False, 
-                    stdout=subprocess.PIPE, 
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    timeout=600  # 10 minute timeout for initial clones
-                )
-                if clone_proc.returncode == 0:
-                    record["last_cloned"] = now
-                    record["last_updated"] = now
-                    # Also do an immediate initial archive
-                    create_versioned_archive(repo_path)
-                else:
-                    err_msg = clone_proc.stdout.strip()
-                    logging.error(f"Failed to clone {repo_url}: {err_msg}")
-                    record["status"] = "error"
-                    record["online_description"] = f"Clone error: {err_msg[:100]}"
-                    success = False
-            except subprocess.TimeoutExpired:
-                logging.error(f"Timeout cloning {repo_url}")
-                record["status"] = "error"
-                record["online_description"] = "Clone timed out after 10 minutes"
-                success = False
-            except Exception as e:
-                logging.error(f"Exception during clone for {repo_url}: {str(e)}")
-                record["status"] = "error"
-                record["online_description"] = f"Clone exception: {str(e)[:100]}"
-                success = False
+            os.makedirs(DATA_FOLDER, exist_ok=True)
+            clone_proc = subprocess.run(["git", "clone", repo_url, repo_path],
+                                        check=False, stdout=subprocess.PIPE, text=True)
+            if clone_proc.returncode == 0:
+                record["last_cloned"] = now
+                record["last_updated"] = now
+                # Also do an immediate initial archive
+                create_versioned_archive(repo_path)
+            else:
+                logging.error(f"Failed to clone {repo_url}: {clone_proc.stdout}")
     else:
         logging.warning(f"Skipping clone - GitHub indicates {repo_url} is deleted.")
 
     repos_data[repo_url] = record
     save_cloned_info(repos_data)
-    return success
 
 
 def detect_deleted_or_archived():
@@ -350,59 +295,28 @@ class CloneWorker(QThread):
     """
     logSignal = pyqtSignal(str)     # to display log text in the GUI
     finishedSignal = pyqtSignal(str)  # emits the repo_url when done
-    statusUpdateSignal = pyqtSignal(str, object)  # emits repo_url and updated info - using object instead of dict
-    errorSignal = pyqtSignal(str, str)  # emits repo_url and error message
+    statusUpdateSignal = pyqtSignal(str, dict)  # emits repo_url and updated info
 
     def __init__(self, url, parent=None):
         super().__init__(parent)
         self.url = url
-        self.success = False
 
     def run(self):
         try:
             self.logSignal.emit(f"Starting clone/update: {self.url}")
             
-            # First load data to get initial status in case of GitHub API errors
-            initial_data = load_cloned_info()
-            if self.url in initial_data:
-                self.statusUpdateSignal.emit(self.url, initial_data[self.url])
-                
-            # Clone/update the repo - this will also update the JSON file
-            self.success = clone_or_update_repo(self.url)
+            # Clone/update the repo
+            clone_or_update_repo(self.url)
             
-            # Get updated data after the operation
-            updated_data = load_cloned_info()
-            if self.url in updated_data:
-                self.statusUpdateSignal.emit(self.url, updated_data[self.url])
+            # Get updated data and emit status update
+            repos_data = load_cloned_info()
+            if self.url in repos_data:
+                self.statusUpdateSignal.emit(self.url, repos_data[self.url])
                 
-                # Check if there was an error during the operation
-                if updated_data[self.url].get("status") == "error":
-                    error_msg = updated_data[self.url].get("online_description", "Unknown error")
-                    self.errorSignal.emit(self.url, error_msg)
-                    self.logSignal.emit(f"Error processing {self.url}: {error_msg}")
-                else:
-                    self.logSignal.emit(f"Finished clone/update: {self.url}")
-            else:
-                self.errorSignal.emit(self.url, "Repository data not found after clone operation")
-                self.logSignal.emit(f"Error: Repository data not found after clone operation: {self.url}")
+            self.logSignal.emit(f"Finished clone/update: {self.url}")
         except Exception as e:
-            self.success = False
-            error_msg = str(e)
-            self.errorSignal.emit(self.url, error_msg)
-            self.logSignal.emit(f"Unexpected error: {error_msg}")
-            
-            # Update the JSON with the error
-            try:
-                data = load_cloned_info()
-                if self.url in data:
-                    data[self.url]["status"] = "error"
-                    data[self.url]["online_description"] = f"Error: {error_msg[:100]}"
-                    save_cloned_info(data)
-                    self.statusUpdateSignal.emit(self.url, data[self.url])
-            except Exception as save_err:
-                self.logSignal.emit(f"Failed to update error status: {save_err}")
-        finally:
-            self.finishedSignal.emit(self.url)
+            self.logSignal.emit(f"Error: {str(e)}")
+        self.finishedSignal.emit(self.url)
 
 
 ###############################################################################
@@ -639,283 +553,129 @@ class ArchivedVersionsDialog(QDialog):
 #                               MAIN GUI
 ###############################################################################
 
-class EnhancedTableWidget(QTableWidget):
-    """Extend QTableWidget to allow custom tooltips for cells and column management"""
+class CustomTooltipTable(QTableWidget):
+    """QTableWidget with custom tooltips that follow the mouse cursor closely"""
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMouseTracking(True)
+        # Custom tooltip label
+        self.tooltip_label = QLabel(parent)
+        self.tooltip_label.setStyleSheet("""
+            background-color: #FFFFDC;
+            color: black;
+            border: 1px solid gray;
+            border-radius: 3px;
+            padding: 5px;
+            font-size: 12px;
+        """)
+        self.tooltip_label.setTextFormat(Qt.RichText)  # Support HTML formatting
+        self.tooltip_label.setWordWrap(True)
+        self.tooltip_label.setMaximumWidth(400)
+        self.tooltip_label.hide()
+        
+        # Keep track of the current cell to avoid flickering
+        self.current_cell = (-1, -1)
+        
+        # Install event filter for mouse tracking
         self.viewport().installEventFilter(self)
-        
-        # Track hidden columns
-        self.hidden_columns = set()
-        
-        # Set maximum tooltip width to 400 pixels
-        self.max_tooltip_width = 400
-        
-        # Enable interactive column resizing with real-time updates
-        self.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
-        self.horizontalHeader().setStretchLastSection(False)
-        
-        # Improve resize responsiveness
-        self.setUpdatesEnabled(True)
-        
-        # Ensure columns redraw during resize
-        self.horizontalHeader().setMinimumSectionSize(10)
-        self.horizontalHeader().viewport().setMouseTracking(True)
-        
-        # Setup header context menu
-        self.horizontalHeader().setContextMenuPolicy(Qt.CustomContextMenu)
-        self.horizontalHeader().customContextMenuRequested.connect(self.showHeaderContextMenu)
-        
-        # Connect resize signals and enable live updates
-        self.horizontalHeader().sectionResized.connect(self.onSectionResized)
-        
-        # Connect double click for auto-resize
-        self.horizontalHeader().sectionDoubleClicked.connect(self.autoFitColumn)
-        
-    def onSectionResized(self, logicalIndex, oldSize, newSize):
-        """Handle section resize to ensure immediate visual update"""
-        # Force immediate update of the table on resize
-        QApplication.processEvents()
-        
-    def resizeEvent(self, event):
-        """Override resize event to adjust columns on window resize"""
-        super().resizeEvent(event)
-        
-        # When the widget is resized, we want to ensure proper column sizing
-        if self.model() and self.model().columnCount() > 0:
-            QApplication.processEvents()
     
-    def resizeColumnsToContents(self):
-        """Override to improve performance"""
-        super().resizeColumnsToContents()
-        self.viewport().update()
+    def showEvent(self, event):
+        """Handle resize events properly"""
+        super().showEvent(event)
+        # Hide tooltip when table is shown/resized
+        self.tooltip_label.hide()
         
+    def hideEvent(self, event):
+        """Handle hide events properly"""
+        super().hideEvent(event)
+        # Hide tooltip when table is hidden
+        self.tooltip_label.hide()
+    
     def eventFilter(self, obj, event):
-        """Filter mouse events to show tooltips"""
+        """Filter events to show tooltips close to mouse cursor"""
         if obj is self.viewport():
-            if event.type() == event.MouseMove:
+            if event.type() == QEvent.MouseMove:
                 pos = event.pos()
                 index = self.indexAt(pos)
                 
-                if index.isValid() and index.column() in [0, 1]:  # URL or Description
-                    item = self.item(index.row(), index.column())
-                    if item and item.text():
-                        # Format the tooltip for better readability
-                        text = item.text()
-                        
-                        # If description column and text is long, wrap it
-                        if index.column() == 1 and len(text) > 60:
-                            # Format long descriptions with proper word wrapping
-                            words = text.split()
-                            wrapped_text = ""
-                            line = ""
+                # Check if we're still in the same cell
+                if index.isValid():
+                    current_cell = (index.row(), index.column())
+                    
+                    # Don't update unless we moved to a different cell
+                    if current_cell == self.current_cell and self.tooltip_label.isVisible():
+                        return super().eventFilter(obj, event)
+                    
+                    self.current_cell = current_cell
+                    
+                    if index.column() in [0, 1]:  # URL or Description
+                        item = self.item(index.row(), index.column())
+                        if item and item.text():
+                            text = item.text()
                             
-                            for word in words:
-                                test_line = line + " " + word if line else word
-                                if len(test_line) <= 60:
-                                    line = test_line
-                                else:
-                                    wrapped_text += line + "\n"
-                                    line = word
+                            # Format the tooltip text
+                            if index.column() == 1 and len(text) > 60:  # Description column
+                                # Smart format long text to fit in the tooltip
+                                formatted_text = self.format_tooltip_text(text)
+                                self.tooltip_label.setText(formatted_text)
+                            else:
+                                self.tooltip_label.setText(text)
                             
-                            if line:
-                                wrapped_text += line
-                                
-                            # Use the wrapped text for the tooltip
-                            QToolTip.showText(QCursor.pos(), wrapped_text, self)
-                        else:
-                            # For URLs or short descriptions, just show the text
-                            QToolTip.showText(QCursor.pos(), text, self)
-                    else:
-                        QToolTip.hideText()
-                else:
-                    QToolTip.hideText()
+                            # Position tooltip close to cursor but slightly offset
+                            global_pos = self.mapToGlobal(pos) + QPoint(5, 10)
+                            
+                            # Adjust the tooltip size
+                            self.tooltip_label.adjustSize()
+                            
+                            # Make sure tooltip doesn't go off screen
+                            tooltip_width = self.tooltip_label.width()
+                            tooltip_height = self.tooltip_label.height()
+                            screen_rect = QApplication.desktop().screenGeometry()
+                            
+                            if global_pos.x() + tooltip_width > screen_rect.width():
+                                global_pos.setX(screen_rect.width() - tooltip_width - 10)
+                            
+                            if global_pos.y() + tooltip_height > screen_rect.height():
+                                global_pos.setY(global_pos.y() - tooltip_height - 20)
+                            
+                            self.tooltip_label.move(global_pos)
+                            self.tooltip_label.show()
+                            return True
                         
-        return super().eventFilter(obj, event)
-        
-    def showHeaderContextMenu(self, pos):
-        """Show context menu for header to allow hiding/showing columns"""
-        column = self.horizontalHeader().logicalIndexAt(pos)
-        if column < 0:  # Clicked outside valid columns
-            return
-            
-        menu = QMenu(self)
-        header_text = self.horizontalHeaderItem(column).text()
-        
-        # Create action for hiding this column
-        hide_action = QAction(f"Hide '{header_text}' Column", self)
-        hide_action.triggered.connect(lambda: self.hideColumn(column))
-        menu.addAction(hide_action)
-        
-        # Add separator before the other options
-        menu.addSeparator()
-        
-        # Add options for showing all columns
-        show_all_action = QAction("Show All Columns", self)
-        show_all_action.triggered.connect(self.showAllColumns)
-        menu.addAction(show_all_action)
-        
-        # Add option to reset column widths
-        reset_widths_action = QAction("Reset Column Widths", self)
-        reset_widths_action.triggered.connect(self.resetColumnWidths)
-        menu.addAction(reset_widths_action)
-        
-        # Show the menu at cursor position
-        menu.exec_(self.horizontalHeader().mapToGlobal(pos))
-        
-    def hideColumn(self, column):
-        """Hide the specified column and track it"""
-        super().hideColumn(column)
-        self.hidden_columns.add(column)
-        
-    def showColumn(self, column):
-        """Show the specified column and untrack it"""
-        super().showColumn(column)
-        if column in self.hidden_columns:
-            self.hidden_columns.remove(column)
-            
-    def showAllColumns(self):
-        """Show all columns that were hidden"""
-        for column in list(self.hidden_columns):
-            self.showColumn(column)
-            
-    def resetColumnWidths(self):
-        """Reset all column widths to stretch mode temporarily, then back to interactive"""
-        self.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        QApplication.processEvents()
-        self.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
-        
-    def getColumnVisibilityState(self):
-        """Return a dictionary of column visibility states"""
-        state = {}
-        for i in range(self.columnCount()):
-            header_text = self.horizontalHeaderItem(i).text()
-            is_visible = i not in self.hidden_columns
-            state[header_text] = is_visible
-        return state
-        
-    def setColumnVisibilityState(self, state):
-        """Set column visibility based on provided state dictionary"""
-        for i in range(self.columnCount()):
-            header_text = self.horizontalHeaderItem(i).text()
-            if header_text in state:
-                if state[header_text]:
-                    self.showColumn(i)
-                else:
-                    self.hideColumn(i)
-
-    def autoFitColumn(self, logicalIndex):
-        """Auto-resize column to fit contents on double-click"""
-        self.resizeColumnToContents(logicalIndex)
-        QApplication.processEvents()
-
-class ColumnManagerDialog(QDialog):
-    """Dialog for managing table columns (show/hide/reorder)"""
-    
-    def __init__(self, table, parent=None):
-        super().__init__(parent)
-        self.table = table
-        self.setWindowTitle("Column Manager")
-        self.resize(400, 400)
-        
-        layout = QVBoxLayout()
-        
-        # Instructions label
-        instructions = QLabel("Check columns to show, uncheck to hide. Drag items to reorder.")
-        instructions.setWordWrap(True)
-        layout.addWidget(instructions)
-        
-        # List widget for column management
-        self.columnsListWidget = QListWidget()
-        self.columnsListWidget.setDragDropMode(QListWidget.InternalMove)
-        layout.addWidget(self.columnsListWidget)
-        
-        # Populate list with current columns and their visibility
-        for i in range(table.columnCount()):
-            header_text = table.horizontalHeaderItem(i).text()
-            item = QListWidgetItem(header_text)
-            item.setFlags(item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsDragEnabled)
-            
-            # Set checked state based on column visibility
-            if i not in table.hidden_columns:
-                item.setCheckState(Qt.Checked)
-            else:
-                item.setCheckState(Qt.Unchecked)
+                # Hide if not over a valid item or not in columns 0 or 1
+                self.tooltip_label.hide()
+                self.current_cell = (-1, -1)
+            elif event.type() == QEvent.Leave:
+                # Hide tooltip when mouse leaves table
+                self.tooltip_label.hide()
+                self.current_cell = (-1, -1)
                 
-            self.columnsListWidget.addItem(item)
-        
-        # Buttons
-        buttonLayout = QHBoxLayout()
-        
-        # Reset to default button
-        resetButton = QPushButton("Reset to Default")
-        resetButton.clicked.connect(self.resetToDefault)
-        buttonLayout.addWidget(resetButton)
-        
-        # Select All / Deselect All
-        selectAllButton = QPushButton("Select All")
-        selectAllButton.clicked.connect(self.selectAll)
-        buttonLayout.addWidget(selectAllButton)
-        
-        # Apply button
-        applyButton = QPushButton("Apply")
-        applyButton.clicked.connect(self.applyChanges)
-        buttonLayout.addWidget(applyButton)
-        
-        # Cancel button
-        cancelButton = QPushButton("Cancel")
-        cancelButton.clicked.connect(self.reject)
-        buttonLayout.addWidget(cancelButton)
-        
-        layout.addLayout(buttonLayout)
-        self.setLayout(layout)
-        
-    def resetToDefault(self):
-        """Reset columns to default visibility and order"""
-        for i in range(self.columnsListWidget.count()):
-            item = self.columnsListWidget.item(i)
-            item.setCheckState(Qt.Checked)
+        return super().eventFilter(obj, event)
     
-    def selectAll(self):
-        """Toggle between Select All and Deselect All"""
-        sender = self.sender()
+    def format_tooltip_text(self, text):
+        """Format long text for tooltip with smart line breaks"""
+        if len(text) <= 60:
+            return text
+            
+        words = text.split()
+        lines = []
+        current_line = ""
         
-        if sender.text() == "Select All":
-            # Check all items
-            for i in range(self.columnsListWidget.count()):
-                self.columnsListWidget.item(i).setCheckState(Qt.Checked)
-            sender.setText("Deselect All")
-        else:
-            # Uncheck all items
-            for i in range(self.columnsListWidget.count()):
-                self.columnsListWidget.item(i).setCheckState(Qt.Unchecked)
-            sender.setText("Select All")
-    
-    def applyChanges(self):
-        """Apply the column changes to the table"""
-        # Get current column header texts for mapping
-        header_texts = []
-        for i in range(self.table.columnCount()):
-            header_texts.append(self.table.horizontalHeaderItem(i).text())
-            
-        # Apply visibility changes
-        for i in range(self.columnsListWidget.count()):
-            item = self.columnsListWidget.item(i)
-            column_name = item.text()
-            
-            if column_name in header_texts:
-                column_index = header_texts.index(column_name)
-                if item.checkState() == Qt.Checked:
-                    self.table.showColumn(column_index)
+        for word in words:
+            if len(current_line) + len(word) + 1 <= 60:
+                if current_line:
+                    current_line += " " + word
                 else:
-                    self.table.hideColumn(column_index)
-        
-        # Reordering not implemented in this version as it requires more complex table manipulation
-        # Would need to actually reorder the data as well
-        
-        self.accept()
+                    current_line = word
+            else:
+                lines.append(current_line)
+                current_line = word
+                
+        if current_line:
+            lines.append(current_line)
+            
+        return "<br>".join(lines)  # Use HTML line breaks for better formatting
 
 class RepoSaverGUI(QWidget):
     """
@@ -971,24 +731,8 @@ class RepoSaverGUI(QWidget):
     def initUI(self):
         mainLayout = QVBoxLayout()
 
-        # Top control buttons layout
-        topControlsLayout = QHBoxLayout()
-        
-        # Column Manager Button
-        self.columnManagerBtn = QPushButton("Manage Columns")
-        self.columnManagerBtn.setIcon(QIcon.fromTheme("view-list-details"))
-        self.columnManagerBtn.setToolTip("Show/hide columns and change their order")
-        self.columnManagerBtn.clicked.connect(self.showColumnManager)
-        topControlsLayout.addWidget(self.columnManagerBtn)
-        
-        # Add stretcher to push the button to the right
-        topControlsLayout.addStretch(1)
-        
-        # Add to main layout
-        mainLayout.addLayout(topControlsLayout)
-
         # Table
-        self.repoTable = EnhancedTableWidget()
+        self.repoTable = CustomTooltipTable(self)
         self.repoTable.setColumnCount(8)
         self.repoTable.setHorizontalHeaderLabels([
             "Repo URL",
@@ -1000,26 +744,7 @@ class RepoSaverGUI(QWidget):
             "Archives",
             "README"
         ])
-        
-        # Make the table non-editable by default
-        self.repoTable.setEditTriggers(QTableWidget.NoEditTriggers)
-        
-        # Enable real-time visual feedback during column resizing
-        self.repoTable.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
-        self.repoTable.horizontalHeader().setStretchLastSection(False)
-        
-        # Enable the horizontal header to respond to mouse move events during resize
-        self.repoTable.horizontalHeader().setSectionsMovable(False)
-        self.repoTable.horizontalHeader().setSectionsClickable(True)
-        
-        # Set default widths - initially stretch to fill available space
         self.repoTable.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        QApplication.processEvents()  # Force layout update
-        
-        # After initial layout, switch back to interactive mode
-        # This allows columns to be resized while maintaining their proportions
-        QTimer.singleShot(100, self.setupColumnWidths)
-        
         mainLayout.addWidget(self.repoTable)
 
         # Add / Bulk / Refresh
@@ -1112,27 +837,24 @@ class RepoSaverGUI(QWidget):
         row_idx = self.repoTable.rowCount()
         self.repoTable.insertRow(row_idx)
 
-        # 0. Repo URL - Make read-only
+        # 0. Repo URL
         url_item = QTableWidgetItem(repo_url)
-        url_item.setToolTip(repo_url)  # Add tooltip for full URL on hover
-        url_item.setFlags(url_item.flags() & ~Qt.ItemIsEditable)  # Make non-editable
+        url_item.setToolTip(repo_url)  # Explicitly set tooltip for URL
         self.repoTable.setItem(row_idx, 0, url_item)
 
-        # 1. Description - Make read-only
+        # 1. Description
         desc = info.get("online_description", "")
         desc_item = QTableWidgetItem(desc)
-        desc_item.setToolTip(desc)  # Add tooltip for full description on hover
-        desc_item.setFlags(desc_item.flags() & ~Qt.ItemIsEditable)  # Make non-editable
+        desc_item.setToolTip(desc)  # Explicitly set tooltip for description
         self.repoTable.setItem(row_idx, 1, desc_item)
 
         # 2. Status
         status = info.get("status", "")
         status_item = QTableWidgetItem(status)
-        status_item.setFlags(status_item.flags() & ~Qt.ItemIsEditable)  # Make non-editable
         
         # Color-code the status
         if status == "active":
-            status_item.setBackground(QColor(50, 180, 50))  # Darker green
+            status_item.setBackground(QColor(200, 255, 200))  # Light green
         elif status == "archived":
             status_item.setBackground(QColor(255, 255, 200))  # Light yellow
         elif status == "deleted":
@@ -1146,15 +868,11 @@ class RepoSaverGUI(QWidget):
 
         # 3. Last Cloned
         last_cloned = info.get("last_cloned", "")
-        cloned_item = QTableWidgetItem(last_cloned)
-        cloned_item.setFlags(cloned_item.flags() & ~Qt.ItemIsEditable)  # Make non-editable
-        self.repoTable.setItem(row_idx, 3, cloned_item)
+        self.repoTable.setItem(row_idx, 3, QTableWidgetItem(last_cloned))
 
         # 4. Last Updated
         last_updated = info.get("last_updated", "")
-        updated_item = QTableWidgetItem(last_updated)
-        updated_item.setFlags(updated_item.flags() & ~Qt.ItemIsEditable)  # Make non-editable
-        self.repoTable.setItem(row_idx, 4, updated_item)
+        self.repoTable.setItem(row_idx, 4, QTableWidgetItem(last_updated))
 
         # 5. "Open Folder" button
         btn_folder = QPushButton("Folder")
@@ -1216,66 +934,86 @@ class RepoSaverGUI(QWidget):
                 with self.queue_lock:
                     if url in self.active_urls:
                         self.queue.task_done()
-                        self.appendLog(f"Skipping duplicate in queue: {url}")
                         continue
-                    
-                    # Mark URL as being processed and update status
                     self.active_urls.add(url)
-                    
-                    # Update status in UI to show it's being processed
-                    data = load_cloned_info()
-                    if url in data:
-                        data[url]["status"] = "pending" 
-                        save_cloned_info(data)
-                        self.updateRowForRepo(url, data[url])
                 
                 # Process the URL
-                self.appendLog(f"Starting to process from queue: {url}")
                 self.spawnCloneThread(url)
                 
-                # Mark task as complete in queue
+                # Mark task as complete
                 self.queue.task_done()
             except queue.Empty:
                 # No URLs in queue, just continue
                 continue
             except Exception as e:
                 logging.error(f"Error in queue processing: {e}")
-                self.appendLog(f"Queue processing error: {str(e)}")
                 # Don't want to lose the URL if there's an exception
                 with self.queue_lock:
-                    if 'url' in locals() and url in self.active_urls:
+                    if url in self.active_urls:
                         self.active_urls.remove(url)
-                        self.appendLog(f"Removed from active URLs due to error: {url}")
-                        
-                # Mark task as complete in queue if URL was retrieved
-                if 'url' in locals():
-                    self.queue.task_done()
 
-    def spawnCloneThread(self, repo_url):
-        """Create a CloneWorker for the given repo_url, ensuring a pull + archive."""
-        worker = CloneWorker(repo_url)
-        self.threads.append(worker)  # keep a reference
-        worker.logSignal.connect(self.appendLog)
-        worker.statusUpdateSignal.connect(self.updateRepoStatus)
-        worker.errorSignal.connect(self.handleRepoError)
-        worker.finishedSignal.connect(lambda url: self.cloneFinished(url))
-        worker.start()
-        
-    def handleRepoError(self, repo_url, error_msg):
-        """Handle errors reported during repository processing."""
-        self.appendLog(f"ERROR for {repo_url}: {error_msg}")
-        
-        # Update UI to show error state
-        data = load_cloned_info()
-        if repo_url in data and data[repo_url].get("status") != "error":
-            data[repo_url]["status"] = "error"
-            data[repo_url]["online_description"] = f"Error: {error_msg[:100]}"
-            save_cloned_info(data)
-            self.updateRowForRepo(repo_url, data[repo_url])
-            
-        # Don't show error messages for every repository in bulk operations
-        # This would lead to too many popups
-        # Error is already visible in the UI table with red background and in the log
+    def bulkUpload(self):
+        """
+        Prompt for a .txt file, read each line as a GitHub URL.
+        Reload the existing JSON first to preserve old data.
+        Then for each line, if it's brand new, add it.
+        Then spawn a worker for every line (even if it existed).
+        """
+        dlg = QFileDialog(self, "Select .txt file with GitHub URLs", os.getcwd(), "Text Files (*.txt)")
+        if dlg.exec_():
+            selected = dlg.selectedFiles()
+            if not selected:
+                return
+            txt_file = selected[0]
+            if not os.path.isfile(txt_file):
+                QMessageBox.warning(self, "File Error", "Selected file not found.")
+                return
+
+            # Reload existing JSON so we don't overwrite older entries
+            all_data = load_cloned_info()
+
+            with open(txt_file, "r", encoding="utf-8") as f:
+                lines = [ln.strip() for ln in f if ln.strip()]
+
+            added_count = 0
+            queued_count = 0
+            for line in lines:
+                url = line
+                if not validate_repo_url(url):
+                    continue
+                if not url.endswith(".git"):
+                    url += ".git"
+
+                # If brand new, add an entry
+                if url not in all_data:
+                    all_data[url] = {
+                        "last_cloned": "",
+                        "last_updated": "",
+                        "local_path": os.path.join(DATA_FOLDER, url.split("/")[-1]),
+                        "online_description": "",
+                        "status": "pending"
+                    }
+                    added_count += 1
+
+            # Save the merged data
+            save_cloned_info(all_data)
+            # Also update our in-memory store and table
+            self.repoData = all_data
+            self.populateTable()  # re-draw table with all updates
+
+            # Now queue URLs for processing through the thread pool
+            for line in lines:
+                url = line
+                if not validate_repo_url(url):
+                    continue
+                if not url.endswith(".git"):
+                    url += ".git"
+                
+                # Add to queue for processing
+                self.queue.put(url)
+                queued_count += 1
+
+            self.appendLog(f"Bulk upload processed {len(lines)} lines. Added {added_count} new repos. Queued {queued_count} repos for processing.\n")
 
     def updateRepoStatus(self, repo_url, info):
         """
@@ -1291,6 +1029,15 @@ class RepoSaverGUI(QWidget):
         # Log the update
         status = info.get("status", "unknown")
         self.appendLog(f"Status update for {repo_url}: {status}, description: {info.get('online_description', '')}")
+
+    def spawnCloneThread(self, repo_url):
+        """Create a CloneWorker for the given repo_url, ensuring a pull + archive."""
+        worker = CloneWorker(repo_url)
+        self.threads.append(worker)  # keep a reference
+        worker.logSignal.connect(self.appendLog)
+        worker.statusUpdateSignal.connect(self.updateRepoStatus)
+        worker.finishedSignal.connect(lambda url: self.cloneFinished(url))
+        worker.start()
 
     def cloneFinished(self, repo_url):
         """
@@ -1334,17 +1081,15 @@ class RepoSaverGUI(QWidget):
                 desc = info.get("online_description", "")
                 desc_item = QTableWidgetItem(desc)
                 desc_item.setToolTip(desc)  # Add tooltip for full description on hover
-                desc_item.setFlags(desc_item.flags() & ~Qt.ItemIsEditable)  # Make non-editable
                 self.repoTable.setItem(r, 1, desc_item)
                 
                 # Update status with color coding
                 status = info.get("status", "")
                 status_item = QTableWidgetItem(status)
-                status_item.setFlags(status_item.flags() & ~Qt.ItemIsEditable)  # Make non-editable
                 
                 # Color-code the status
                 if status == "active":
-                    status_item.setBackground(QColor(50, 180, 50))  # Darker green
+                    status_item.setBackground(QColor(200, 255, 200))  # Light green
                 elif status == "archived":
                     status_item.setBackground(QColor(255, 255, 200))  # Light yellow
                 elif status == "deleted":
@@ -1357,14 +1102,8 @@ class RepoSaverGUI(QWidget):
                 self.repoTable.setItem(r, 2, status_item)
                 
                 # Update dates
-                last_cloned = QTableWidgetItem(info.get("last_cloned", ""))
-                last_cloned.setFlags(last_cloned.flags() & ~Qt.ItemIsEditable)  # Make non-editable
-                self.repoTable.setItem(r, 3, last_cloned)
-                
-                last_updated = QTableWidgetItem(info.get("last_updated", ""))
-                last_updated.setFlags(last_updated.flags() & ~Qt.ItemIsEditable)  # Make non-editable
-                self.repoTable.setItem(r, 4, last_updated)
-                
+                self.repoTable.setItem(r, 3, QTableWidgetItem(info.get("last_cloned", "")))
+                self.repoTable.setItem(r, 4, QTableWidgetItem(info.get("last_updated", "")))
                 row_found = True
                 break
                 
@@ -1542,55 +1281,9 @@ class RepoSaverGUI(QWidget):
                 if repo_url not in self.active_urls:
                     self.queue.put(repo_url)
                     count += 1
-        
-        # Track start time for completion summary            
-        self.bulk_operation_start_time = datetime.datetime.now()
-        self.repos_queued_count = count
-        
-        # Set up a timer to check if all operations are complete
-        self.bulk_completion_timer = QTimer(self)
-        self.bulk_completion_timer.setInterval(2000)  # Check every 2 seconds
-        self.bulk_completion_timer.timeout.connect(self.checkBulkOperationCompletion)
-        self.bulk_completion_timer.start()
-        
+                    
         QMessageBox.information(self, "Update Started", 
                                f"Update started for {count} repositories. Check the log for progress.")
-    
-    def checkBulkOperationCompletion(self):
-        """Check if bulk operation is complete and show summary if it is."""
-        # If no queue and no active operations, we're done
-        if self.queue.empty() and len(self.active_urls) == 0:
-            # Stop the timer
-            self.bulk_completion_timer.stop()
-            
-            # Calculate elapsed time
-            elapsed_time = datetime.datetime.now() - self.bulk_operation_start_time
-            
-            # Check error counts
-            error_count = 0
-            for repo_url, info in self.repoData.items():
-                if info.get("status") == "error":
-                    error_count += 1
-            
-            # Show summary
-            success_count = self.repos_queued_count - error_count
-            self.appendLog(
-                f"\nBulk operation completed in {elapsed_time.total_seconds():.1f} seconds\n"
-                f"Processed: {self.repos_queued_count} repositories\n"
-                f"Successful: {success_count}\n"
-                f"Errors: {error_count}\n"
-            )
-            
-            # Only show a dialog if there were errors
-            if error_count > 0:
-                QMessageBox.warning(
-                    self,
-                    "Bulk Operation Complete with Errors",
-                    f"Bulk operation completed in {elapsed_time.total_seconds():.1f} seconds.\n\n"
-                    f"Successfully processed: {success_count} repositories\n"
-                    f"Errors: {error_count} repositories\n\n"
-                    "Please check the error status in the table for details."
-                )
 
     def updateStatusIndicators(self):
         """Update status indicators with current counts."""
@@ -1630,9 +1323,6 @@ class RepoSaverGUI(QWidget):
         if hasattr(self, 'statusUpdateTimer') and self.statusUpdateTimer:
             self.statusUpdateTimer.stop()
             
-        if hasattr(self, 'bulk_completion_timer') and self.bulk_completion_timer:
-            self.bulk_completion_timer.stop()
-            
         # Shutdown the thread pool
         self.thread_pool.shutdown(wait=False)
         
@@ -1643,168 +1333,6 @@ class RepoSaverGUI(QWidget):
                 t.wait()
         super().closeEvent(event)
 
-    def bulkUpload(self):
-        """
-        Prompt for a .txt file, read each line as a GitHub URL.
-        Reload the existing JSON first to preserve old data.
-        Then for each line, if it's brand new, add it.
-        Then queue each URL for sequential processing.
-        """
-        dlg = QFileDialog(self, "Select .txt file with GitHub URLs", os.getcwd(), "Text Files (*.txt)")
-        if dlg.exec_():
-            selected = dlg.selectedFiles()
-            if not selected:
-                return
-            txt_file = selected[0]
-            if not os.path.isfile(txt_file):
-                QMessageBox.warning(self, "File Error", "Selected file not found.")
-                return
-
-            try:
-                # Read all lines from the file
-                with open(txt_file, "r", encoding="utf-8") as f:
-                    lines = [ln.strip() for ln in f if ln.strip()]
-                
-                if not lines:
-                    QMessageBox.warning(self, "Empty File", "No URLs found in the selected file.")
-                    return
-                    
-                # Confirm the operation with user
-                confirm = QMessageBox.question(
-                    self, 
-                    "Confirm Bulk Upload", 
-                    f"Found {len(lines)} URLs in the file. Proceed with processing?",
-                    QMessageBox.Yes | QMessageBox.No
-                )
-                
-                if confirm != QMessageBox.Yes:
-                    return
-                
-                # Reload existing JSON so we don't overwrite older entries
-                all_data = load_cloned_info()
-
-                # Pre-process URLs for validation and unique counting
-                valid_urls = []
-                invalid_urls = []
-                added_count = 0
-                
-                for line in lines:
-                    url = line.strip()
-                    if not url:
-                        continue
-                        
-                    if not validate_repo_url(url):
-                        invalid_urls.append(url)
-                        continue
-                        
-                    if not url.endswith(".git"):
-                        url += ".git"
-                    
-                    valid_urls.append(url)
-                    
-                    # If brand new, add an entry
-                    if url not in all_data:
-                        all_data[url] = {
-                            "last_cloned": "",
-                            "last_updated": "",
-                            "local_path": os.path.join(DATA_FOLDER, url.split("/")[-1]),
-                            "online_description": "",
-                            "status": "pending"
-                        }
-                        added_count += 1
-
-                # Save the merged data
-                save_cloned_info(all_data)
-                # Also update our in-memory store and table
-                self.repoData = all_data
-                self.populateTable()  # re-draw table with all updates
-
-                # Queue URLs for processing
-                queued_count = 0
-                for url in valid_urls:
-                    # Each valid URL gets queued for sequential processing
-                    self.queue.put(url)
-                    queued_count += 1
-
-                # Log the results
-                status_msg = (
-                    f"Bulk upload processed {len(lines)} lines.\n"
-                    f"- Added {added_count} new repos to database\n"
-                    f"- Queued {queued_count} valid repos for processing\n"
-                )
-                
-                if invalid_urls:
-                    status_msg += f"- Found {len(invalid_urls)} invalid URLs that were skipped\n"
-                    for i, invalid in enumerate(invalid_urls[:5], 1):
-                        status_msg += f"  {i}. {invalid}\n"
-                    if len(invalid_urls) > 5:
-                        status_msg += f"  ... and {len(invalid_urls) - 5} more\n"
-                
-                self.appendLog(status_msg)
-                
-                # Track start time for completion summary            
-                self.bulk_operation_start_time = datetime.datetime.now()
-                self.repos_queued_count = queued_count
-                
-                # Set up a timer to check if all operations are complete
-                self.bulk_completion_timer = QTimer(self)
-                self.bulk_completion_timer.setInterval(2000)  # Check every 2 seconds
-                self.bulk_completion_timer.timeout.connect(self.checkBulkOperationCompletion)
-                self.bulk_completion_timer.start()
-                
-                # Show a summary dialog
-                QMessageBox.information(
-                    self, 
-                    "Bulk Upload Started", 
-                    f"Started processing {queued_count} repositories.\n\n"
-                    f"Added {added_count} new repositories to the database.\n"
-                    f"Invalid URLs skipped: {len(invalid_urls)}\n\n"
-                    "Check the log for progress updates."
-                )
-                
-            except Exception as e:
-                logging.error(f"Error during bulk upload: {e}")
-                QMessageBox.critical(
-                    self, 
-                    "Bulk Upload Error", 
-                    f"An error occurred during the bulk upload process:\n{str(e)}"
-                )
-
-    def showColumnManager(self):
-        """Show the column manager dialog"""
-        dialog = ColumnManagerDialog(self.repoTable, self)
-        dialog.exec_()
-
-    def setupColumnWidths(self):
-        """Set up column widths after initial layout"""
-        # Switch to interactive mode for manual resizing
-        header = self.repoTable.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.Interactive)
-        
-        # Ensure columns maintain default widths but allow resizing
-        total_width = self.repoTable.viewport().width()
-        column_count = self.repoTable.columnCount()
-        
-        # Calculate initial column widths
-        # First 2 columns (URL, Description) get more space
-        url_width = int(total_width * 0.25)  # 25% for URL
-        desc_width = int(total_width * 0.25)  # 25% for Description
-        
-        # Remaining 50% distributed among other columns
-        remaining_width = total_width - url_width - desc_width
-        other_column_width = int(remaining_width / (column_count - 2))
-        
-        # Set widths
-        header.resizeSection(0, url_width)  # URL
-        header.resizeSection(1, desc_width)  # Description
-        
-        # Set remaining column widths
-        for i in range(2, column_count):
-            header.resizeSection(i, other_column_width)
-            
-        # Ensure visual updates
-        self.repoTable.viewport().update()
-
 
 ###############################################################################
 #                               MAIN ENTRY
@@ -1812,21 +1340,6 @@ class RepoSaverGUI(QWidget):
 
 def main():
     setup_logging()
-    
-    # Suppress Qt console warnings by redirecting stderr before creating QApplication
-    # This won't affect logging, just the Qt warnings
-    if not os.environ.get('DEBUG_QT'):
-        import sys
-        original_stderr = sys.stderr
-        class QtWarningFilter:
-            def write(self, text):
-                # Only write non-Qt warnings to original stderr
-                if not any(msg in text for msg in ["QVector<int>", "QTextCursor", "qRegisterMetaType"]):
-                    original_stderr.write(text)
-            def flush(self):
-                original_stderr.flush()
-        sys.stderr = QtWarningFilter()
-        
     app = QApplication(sys.argv)
     gui = RepoSaverGUI()
     gui.show()

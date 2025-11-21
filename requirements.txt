@@ -1,5 +1,7 @@
-# Python requirements for the GitHub Repo Saver single-file app
+# Python requirements for the GitHub Repo Saver web app
 # Install via: pip install -r requirements.txt
 
-PyQt5
+flask
+flask-cors
 requests
+markdown

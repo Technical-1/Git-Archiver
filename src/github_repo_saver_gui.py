@@ -1,14 +1,7 @@
 #!/usr/bin/env python3
 """
-Single-file GitHub Repo Saver with PyQt (FIXED JSON ADDING):
-- JSON-based storage (cloned_repos.json) tracks repos and metadata.
-- Adds new repos (single or bulk from .txt) in threads; each does 'clone or pull'.
-- If 'git pull' actually fetches new commits, we create a timestamped archive.
-- Table columns: URL, Description, Status, Last Cloned, Last Updated,
-  plus separate columns for Folder, Archives, README (so buttons don't get cut off).
-- Bulk Upload always spawns a clone/pull for each line, even if it's already in JSON.
-
-**Fix**: Always reload the existing JSON in memory before adding new repos, so we don't overwrite old data.
+GitHub Repo Saver GUI Application.
+PyQt5-based GUI for managing GitHub repository cloning, updates, and archiving.
 
 Dependencies:
     pip install pyqt5 requests
@@ -17,16 +10,41 @@ Dependencies:
 import sys
 import os
 import json
-import subprocess
-import logging
 import datetime
-import requests
 import tempfile
 import threading
 import queue
+import subprocess
+import logging
 from concurrent.futures import ThreadPoolExecutor
+try:
+    import markdown
+    MARKDOWN_AVAILABLE = True
+except ImportError:
+    MARKDOWN_AVAILABLE = False
+
+# Import backend module
+from repo_manager import (
+    setup_logging,
+    validate_repo_url,
+    load_cloned_info,
+    save_cloned_info,
+    clone_or_update_repo,
+    detect_deleted_or_archived,
+    add_repo_to_database,
+    get_last_auto_update_time,
+    save_last_auto_update_time,
+    should_run_auto_update,
+    list_archives,
+    get_archive_info,
+    delete_archive,
+    delete_repo_from_database,
+    delete_multiple_repos_from_database,
+    DATA_FOLDER,
+)
 
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QRect, QPoint, QEventLoop
+from PyQt5.QtGui import QKeyEvent
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
     QTableWidget, QTableWidgetItem, QHeaderView,
@@ -34,310 +52,9 @@ from PyQt5.QtWidgets import (
     QDialog, QListWidget, QListWidgetItem, QFileDialog,
     QDialog, QVBoxLayout, QHBoxLayout, QWidget, QProgressBar, QStatusBar,
     QToolTip, QMenu, QAction, QAbstractItemView, QMainWindow, QSystemTrayIcon,
-    QProgressDialog
+    QProgressDialog, QSizePolicy
 )
-from PyQt5.QtGui import QColor, QCursor, QIcon
-
-
-###############################################################################
-#                               DATA & LOGIC
-###############################################################################
-
-CLONED_JSON_PATH = "cloned_repos.json"
-DATA_FOLDER = "data"  # local folder where repos will be cloned
-
-
-def setup_logging():
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-
-
-def validate_repo_url(url: str) -> bool:
-    """Basic check: must start with https://github.com/"""
-    # More thorough validation to ensure it's a proper GitHub repo URL
-    if not url.startswith("https://github.com/"):
-        return False
-    
-    # Check if URL has at least owner/repo format
-    parts = url.strip("/").split("/")
-    if len(parts) < 5:  # https:, '', github.com, owner, repo
-        return False
-    
-    # Check for valid repo name (alphanumeric, hyphens, underscores, dots)
-    repo_name = parts[-1].replace(".git", "")
-    if not repo_name or not all(c.isalnum() or c in "-_." for c in repo_name):
-        return False
-        
-    return True
-
-
-def load_cloned_info() -> dict:
-    """
-    Load 'cloned_repos.json' which tracks each repo's data:
-      {
-        "https://github.com/user/repo.git": {
-          "last_cloned": "YYYY-MM-DD HH:MM:SS",
-          "last_updated": "YYYY-MM-DD HH:MM:SS",
-          "local_path": "data/repo.git",
-          "online_description": "...",
-          "status": "active"/"archived"/"deleted"/"error",
-        },
-        ...
-      }
-    """
-    if not os.path.isfile(CLONED_JSON_PATH):
-        return {}
-    try:
-        with open(CLONED_JSON_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return {}
-
-
-def save_cloned_info(data: dict):
-    """Write the updated dictionary to 'cloned_repos.json'."""
-    # Use atomic write pattern to prevent data corruption if the program crashes during write
-    temp_file = f"{CLONED_JSON_PATH}.tmp"
-    try:
-        with open(temp_file, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-        
-        # On Windows, we need to remove the target file first
-        if os.name == 'nt' and os.path.exists(CLONED_JSON_PATH):
-            os.unlink(CLONED_JSON_PATH)
-            
-        # Atomic rename operation
-        os.rename(temp_file, CLONED_JSON_PATH)
-    except Exception as e:
-        logging.error(f"Failed to save cloned repo data: {e}")
-        if os.path.exists(temp_file):
-            try:
-                os.unlink(temp_file)
-            except:
-                pass
-        raise
-
-
-def current_timestamp() -> str:
-    """Return the current local time as a string."""
-    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-
-def get_online_repo_description(owner, repo_name):
-    """
-    Query GitHub API to fetch the description + archived/deleted status.
-    Returns (description_str, is_archived_bool, is_deleted_bool).
-    """
-    api_url = f"https://api.github.com/repos/{owner}/{repo_name}"
-    try:
-        resp = requests.get(api_url, headers={"Accept": "application/vnd.github.v3+json"}, timeout=10)
-        if resp.status_code == 200:
-            data = resp.json()
-            desc = data.get("description", "") or ""
-            archived = data.get("archived", False)
-            return desc, archived, False
-        elif resp.status_code == 404:
-            return "", False, True  # repo does not exist or is private/deleted
-        else:
-            logging.warning(f"Unexpected status code {resp.status_code} fetching {owner}/{repo_name}")
-            return "", False, False
-    except requests.RequestException as e:
-        logging.warning(f"Failed to fetch {owner}/{repo_name}: {e}")
-        return "", False, False
-
-
-def create_versioned_archive(repo_path: str):
-    """
-    Compress the entire repo folder into a timestamped archive within repo_path/versions/.
-    """
-    timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    versions_folder = os.path.join(repo_path, "versions")
-    os.makedirs(versions_folder, exist_ok=True)
-
-    archive_path = os.path.join(versions_folder, f"{timestamp}.tar.xz")
-    logging.info(f"Creating new archive: {archive_path}")
-    try:
-        # Improved compression options: -9 for highest compression level and --exclude=.git
-        # to avoid storing the potentially large .git directory in the archive
-        subprocess.run(
-            ["tar", "-cJf", archive_path, "--exclude=.git", "-C", repo_path, "."],
-            check=True, 
-            stdout=subprocess.PIPE, 
-            stderr=subprocess.PIPE
-        )
-        # Verify the archive was created successfully
-        if os.path.exists(archive_path) and os.path.getsize(archive_path) > 0:
-            logging.info(f"Archive created successfully: {archive_path}")
-        else:
-            logging.error(f"Archive creation failed, output file not found or empty: {archive_path}")
-    except subprocess.CalledProcessError as e:
-        logging.error(f"Failed to create archive for {repo_path}: {e}")
-        logging.error(f"Error output: {e.stderr.decode() if hasattr(e, 'stderr') else 'No error output'}")
-
-
-def clone_or_update_repo(repo_url: str):
-    """
-    - Load existing JSON record (or create a new one).
-    - Check GitHub for description/archived/deleted -> 'status'.
-    - If not "deleted", clone or pull.
-      - If new commits are actually pulled, we archive.
-      - If brand-new clone, we also archive once.
-    - Save JSON updates.
-    
-    Returns: True if successful, False if there was an error
-    """
-    repos_data = load_cloned_info()
-    repo_name = repo_url.rstrip("/").split("/")[-1]  # e.g. "some-repo.git"
-    repo_path = os.path.join(DATA_FOLDER, repo_name)
-
-    # Parse out owner/repo
-    parts = repo_url.replace("https://github.com/", "").split("/")
-    if len(parts) >= 2:
-        owner, raw_repo = parts[0], parts[1].replace(".git", "")
-        desc, is_arch, is_del = get_online_repo_description(owner, raw_repo)
-        if is_del:
-            status = "deleted"
-        elif is_arch:
-            status = "archived"
-        else:
-            status = "active"
-    else:
-        desc = ""
-        status = "error"
-        logging.error(f"Invalid repository URL format: {repo_url}")
-        
-        # Update record with error status
-        record = repos_data.get(repo_url, {
-            "last_cloned": "",
-            "last_updated": "",
-            "local_path": repo_path,
-            "online_description": "Invalid URL format",
-            "status": "error",
-        })
-        repos_data[repo_url] = record
-        save_cloned_info(repos_data)
-        return False
-
-    now = current_timestamp()
-    record = repos_data.get(repo_url, {
-        "last_cloned": "",
-        "last_updated": "",
-        "local_path": repo_path,
-        "online_description": desc,
-        "status": status,
-    })
-
-    record["online_description"] = desc
-    record["status"] = status
-    record["local_path"] = repo_path
-    
-    success = True
-
-    if status != "deleted":
-        # If local folder exists, do a pull
-        if os.path.isdir(repo_path):
-            logging.info(f"Pulling updates for {repo_url}")
-            try:
-                pull_proc = subprocess.run(
-                    ["git", "-C", repo_path, "pull"],
-                    check=False,  # handle errors ourselves
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    timeout=300  # 5 minute timeout
-                )
-                if pull_proc.returncode == 0:
-                    record["last_cloned"] = now
-                    record["last_updated"] = now
-
-                    # Check if we actually got new commits
-                    pull_out = pull_proc.stdout.lower()
-                    if "already up to date" not in pull_out and "up to date" not in pull_out:
-                        # We appear to have new commits => archive
-                        create_versioned_archive(repo_path)
-                else:
-                    logging.error(f"Failed to pull {repo_url}: {pull_proc.stdout}")
-                    record["status"] = "error"
-                    record["online_description"] = f"Pull error: {pull_proc.stdout[:100]}"
-                    success = False
-            except subprocess.TimeoutExpired:
-                logging.error(f"Timeout pulling {repo_url}")
-                record["status"] = "error"
-                record["online_description"] = "Pull timed out after 5 minutes"
-                success = False
-            except Exception as e:
-                logging.error(f"Exception during pull for {repo_url}: {str(e)}")
-                record["status"] = "error"
-                record["online_description"] = f"Pull exception: {str(e)[:100]}"
-                success = False
-        else:
-            # clone new
-            logging.info(f"Cloning {repo_url} -> {repo_path}")
-            try:
-                os.makedirs(DATA_FOLDER, exist_ok=True)
-                clone_proc = subprocess.run(
-                    ["git", "clone", repo_url, repo_path],
-                    check=False, 
-                    stdout=subprocess.PIPE, 
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    timeout=600  # 10 minute timeout for initial clones
-                )
-                if clone_proc.returncode == 0:
-                    record["last_cloned"] = now
-                    record["last_updated"] = now
-                    # Also do an immediate initial archive
-                    create_versioned_archive(repo_path)
-                else:
-                    err_msg = clone_proc.stdout.strip()
-                    logging.error(f"Failed to clone {repo_url}: {err_msg}")
-                    record["status"] = "error"
-                    record["online_description"] = f"Clone error: {err_msg[:100]}"
-                    success = False
-            except subprocess.TimeoutExpired:
-                logging.error(f"Timeout cloning {repo_url}")
-                record["status"] = "error"
-                record["online_description"] = "Clone timed out after 10 minutes"
-                success = False
-            except Exception as e:
-                logging.error(f"Exception during clone for {repo_url}: {str(e)}")
-                record["status"] = "error"
-                record["online_description"] = f"Clone exception: {str(e)[:100]}"
-                success = False
-    else:
-        logging.warning(f"Skipping clone - GitHub indicates {repo_url} is deleted.")
-
-    repos_data[repo_url] = record
-    save_cloned_info(repos_data)
-    return success
-
-
-def detect_deleted_or_archived():
-    """
-    For each repo in JSON, re-check GitHub for archived/deleted status and update.
-    """
-    data = load_cloned_info()
-    changed = False
-    for repo_url, rec in data.items():
-        parts = repo_url.replace("https://github.com/", "").split("/")
-        if len(parts) < 2:
-            continue
-        owner, raw_repo = parts[0], parts[1].replace(".git", "")
-        desc, is_arch, is_del = get_online_repo_description(owner, raw_repo)
-        if is_del:
-            rec["status"] = "deleted"
-        elif is_arch:
-            rec["status"] = "archived"
-        else:
-            rec["status"] = "active"
-        rec["online_description"] = desc
-        changed = True
-
-    if changed:
-        save_cloned_info(data)
+from PyQt5.QtGui import QColor, QCursor, QIcon, QFontMetrics
 
 
 ###############################################################################
@@ -368,7 +85,8 @@ class CloneWorker(QThread):
                 self.statusUpdateSignal.emit(self.url, initial_data[self.url])
                 
             # Clone/update the repo - this will also update the JSON file
-            self.success = clone_or_update_repo(self.url)
+            success, error_msg = clone_or_update_repo(self.url)
+            self.success = success
             
             # Get updated data after the operation
             updated_data = load_cloned_info()
@@ -376,10 +94,13 @@ class CloneWorker(QThread):
                 self.statusUpdateSignal.emit(self.url, updated_data[self.url])
                 
                 # Check if there was an error during the operation
-                if updated_data[self.url].get("status") == "error":
-                    error_msg = updated_data[self.url].get("online_description", "Unknown error")
-                    self.errorSignal.emit(self.url, error_msg)
-                    self.logSignal.emit(f"Error processing {self.url}: {error_msg}")
+                if not success or updated_data[self.url].get("status") == "error":
+                    if error_msg:
+                        error_display = error_msg
+                    else:
+                        error_display = updated_data[self.url].get("online_description", "Unknown error")
+                    self.errorSignal.emit(self.url, error_display)
+                    self.logSignal.emit(f"Error processing {self.url}: {error_display}")
                 else:
                     self.logSignal.emit(f"Finished clone/update: {self.url}")
             else:
@@ -451,13 +172,18 @@ class ArchivedVersionsDialog(QDialog):
 
     def updateInfoLabel(self):
         """Update the summary info about archives."""
-        versions_dir = os.path.join(self.repo_path, "versions")
-        if not os.path.isdir(versions_dir):
+        archives = list_archives(self.repo_path)
+        
+        if not archives:
             self.infoLabel.setText("No archives found.")
             return
-            
-        archives = [f for f in os.listdir(versions_dir) if f.endswith(".tar.xz")]
-        total_size = sum(os.path.getsize(os.path.join(versions_dir, f)) for f in archives)
+        
+        # Calculate total size
+        total_size = 0
+        for archive_name in archives:
+            archive_info = get_archive_info(self.repo_path, archive_name)
+            if archive_info:
+                total_size += archive_info["size"]
         
         # Format size in human-readable form
         if total_size < 1024:
@@ -472,19 +198,15 @@ class ArchivedVersionsDialog(QDialog):
         self.infoLabel.setText(f"Total archives: {len(archives)}, Total size: {size_str}")
 
     def loadArchivedVersions(self):
-        versions_dir = os.path.join(self.repo_path, "versions")
-        if not os.path.isdir(versions_dir):
-            return
-            
-        # Get all archives and sort by timestamp (newest first)
-        archives = [f for f in os.listdir(versions_dir) if f.endswith(".tar.xz")]
-        archives.sort(reverse=True)
+        archives = list_archives(self.repo_path)
         
-        for item in archives:
-            item_path = os.path.join(versions_dir, item)
-            size = os.path.getsize(item_path)
+        for archive_name in archives:
+            archive_info = get_archive_info(self.repo_path, archive_name)
+            if archive_info is None:
+                continue
             
             # Format size
+            size = archive_info["size"]
             if size < 1024:
                 size_str = f"{size} bytes"
             elif size < 1024**2:
@@ -494,17 +216,8 @@ class ArchivedVersionsDialog(QDialog):
             else:
                 size_str = f"{size/1024**3:.1f} GB"
                 
-            # Parse timestamp from filename (e.g., 20220101-123456.tar.xz)
-            timestamp = item.split(".")[0]
-            try:
-                # Convert to readable date
-                date_obj = datetime.datetime.strptime(timestamp, "%Y%m%d-%H%M%S")
-                date_str = date_obj.strftime("%Y-%m-%d %H:%M:%S")
-            except ValueError:
-                date_str = timestamp
-                
-            list_item = QListWidgetItem(f"{date_str} ({size_str})")
-            list_item.setData(Qt.UserRole, item)  # Store actual filename as data
+            list_item = QListWidgetItem(f"{archive_info['date_str']} ({size_str})")
+            list_item.setData(Qt.UserRole, archive_name)  # Store actual filename as data
             self.archivesList.addItem(list_item)
 
     def openSelectedArchive(self):
@@ -514,8 +227,13 @@ class ArchivedVersionsDialog(QDialog):
             return
 
         archive_name = selected_items[0].data(Qt.UserRole)
-        versions_dir = os.path.join(self.repo_path, "versions")
-        archive_path = os.path.join(versions_dir, archive_name)
+        archive_info = get_archive_info(self.repo_path, archive_name)
+        
+        if archive_info is None:
+            QMessageBox.critical(self, "Error", "Archive not found.")
+            return
+        
+        archive_path = archive_info["path"]
 
         if os.path.isdir(archive_path):
             self.openInFinder(archive_path)
@@ -532,7 +250,7 @@ class ArchivedVersionsDialog(QDialog):
                 info_path = os.path.join(temp_dir, "ARCHIVE_INFO.txt")
                 with open(info_path, "w") as f:
                     f.write(f"This is an archived version of {os.path.basename(self.repo_path)}\n")
-                    f.write(f"Archive date: {archive_name.split('.')[0]}\n")
+                    f.write(f"Archive date: {archive_info['date_str']}\n")
                     f.write(f"Original repo: {self.repo_path}\n")
                     f.write("\nNote: This is a temporary directory and will be deleted when you close the Archives dialog.\n")
                 
@@ -547,8 +265,13 @@ class ArchivedVersionsDialog(QDialog):
             return
             
         archive_name = selected_items[0].data(Qt.UserRole)
-        versions_dir = os.path.join(self.repo_path, "versions")
-        archive_path = os.path.join(versions_dir, archive_name)
+        archive_info = get_archive_info(self.repo_path, archive_name)
+        
+        if archive_info is None:
+            QMessageBox.critical(self, "Error", "Archive not found.")
+            return
+        
+        archive_path = archive_info["path"]
         
         # Extract to temp dir
         temp_dir = tempfile.mkdtemp(prefix="repo_compare_")
@@ -598,30 +321,41 @@ class ArchivedVersionsDialog(QDialog):
             return
             
         archive_name = selected_items[0].data(Qt.UserRole)
-        versions_dir = os.path.join(self.repo_path, "versions")
-        archive_path = os.path.join(versions_dir, archive_name)
         
         confirm = QMessageBox.question(self, "Confirm Deletion", 
                                       f"Are you sure you want to delete:\n{archive_name}?",
                                       QMessageBox.Yes | QMessageBox.No)
                                       
         if confirm == QMessageBox.Yes:
-            try:
-                os.unlink(archive_path)
+            if delete_archive(self.repo_path, archive_name):
                 self.archivesList.takeItem(self.archivesList.row(selected_items[0]))
                 self.updateInfoLabel()
                 QMessageBox.information(self, "Success", "Archive deleted successfully.")
-            except Exception as e:
-                QMessageBox.critical(self, "Deletion Error", str(e))
+            else:
+                QMessageBox.critical(self, "Deletion Error", "Failed to delete archive.")
 
     def openInFinder(self, path):
-        """Cross-platform folder open."""
-        if sys.platform.startswith("darwin"):
-            subprocess.run(["open", path])
-        elif os.name == "nt":
-            os.startfile(path)
-        else:
-            subprocess.run(["xdg-open", path])
+        """Cross-platform folder open with error handling."""
+        if not path or not os.path.exists(path):
+            QMessageBox.warning(self, "Path Not Found", f"The path does not exist:\n{path}")
+            return
+        
+        try:
+            if sys.platform.startswith("darwin"):
+                subprocess.run(["open", path], check=True, timeout=5)
+            elif os.name == "nt":
+                os.startfile(path)
+            else:
+                subprocess.run(["xdg-open", path], check=True, timeout=5)
+        except subprocess.CalledProcessError as e:
+            logging.error(f"Failed to open folder: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to open folder:\n{path}\n\nError: {str(e)}")
+        except subprocess.TimeoutExpired:
+            logging.error(f"Timeout opening folder: {path}")
+            QMessageBox.warning(self, "Timeout", f"Timeout while trying to open folder:\n{path}")
+        except Exception as e:
+            logging.error(f"Unexpected error opening folder: {e}")
+            QMessageBox.critical(self, "Error", f"Unexpected error opening folder:\n{path}\n\nError: {str(e)}")
             
     def closeEvent(self, event):
         """Clean up any temporary directories on close."""
@@ -653,39 +387,126 @@ class EnhancedTableWidget(QTableWidget):
         # Set maximum tooltip width to 400 pixels
         self.max_tooltip_width = 400
         
-        # Enable interactive column resizing with real-time updates
+        # Enable interactive column resizing with smooth updates
         self.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.horizontalHeader().setStretchLastSection(False)
         
         # Improve resize responsiveness
         self.setUpdatesEnabled(True)
         
-        # Ensure columns redraw during resize
-        self.horizontalHeader().setMinimumSectionSize(10)
-        self.horizontalHeader().viewport().setMouseTracking(True)
+        # Set minimum column width to prevent columns from becoming too small
+        self.horizontalHeader().setMinimumSectionSize(30)
+        
+        # Enable smooth resizing
+        self.horizontalHeader().setDefaultSectionSize(100)
         
         # Setup header context menu
         self.horizontalHeader().setContextMenuPolicy(Qt.CustomContextMenu)
         self.horizontalHeader().customContextMenuRequested.connect(self.showHeaderContextMenu)
         
-        # Connect resize signals and enable live updates
+        # Setup row context menu (right-click on rows)
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self.showRowContextMenu)
+        
+        # Enable row selection
+        self.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.setSelectionMode(QAbstractItemView.ExtendedSelection)  # Allow multiple selection
+        
+        # Connect resize signals for smooth updates (without forcing processEvents)
         self.horizontalHeader().sectionResized.connect(self.onSectionResized)
         
         # Connect double click for auto-resize
         self.horizontalHeader().sectionDoubleClicked.connect(self.autoFitColumn)
         
+        # Store column widths for persistence
+        self.column_widths = {}
+        
     def onSectionResized(self, logicalIndex, oldSize, newSize):
-        """Handle section resize to ensure immediate visual update"""
-        # Force immediate update of the table on resize
-        QApplication.processEvents()
+        """Handle section resize with smooth visual update"""
+        # Store the new width
+        self.column_widths[logicalIndex] = newSize
+        
+        # If description column was resized, recalculate all row heights
+        if logicalIndex == 1:  # Description column
+            # Use a small delay to ensure the resize is complete
+            QTimer.singleShot(10, lambda: self._recalculateAllRowHeights())
+        
+        # Force immediate update of cell widgets (buttons) in this column
+        # This ensures buttons resize smoothly during window resize
+        for row in range(self.rowCount()):
+            widget = self.cellWidget(row, logicalIndex)
+            if widget:
+                # Force widget to update its geometry to match the new column width
+                widget.updateGeometry()
+                widget.update()
+        # Update viewport smoothly
+        self.viewport().update()
+    
+    def _recalculateRowHeight(self, row_idx, description_text):
+        """Recalculate row height when description column width changes"""
+        if not description_text:
+            self.setRowHeight(row_idx, self.verticalHeader().defaultSectionSize())
+            return
+        
+        # Get the current description column width
+        desc_col_width = self.columnWidth(1)
+        if desc_col_width <= 0:
+            desc_col_width = 200
+        
+        # Account for padding (cell padding + scrollbar area)
+        available_width = max(100, desc_col_width - 20)
+        
+        # Calculate text height using font metrics
+        font = self.font()
+        font_metrics = QFontMetrics(font)
+        
+        # Calculate bounding rect for wrapped text
+        text_rect = font_metrics.boundingRect(
+            0, 0, available_width, 0,
+            Qt.TextWordWrap | Qt.AlignLeft | Qt.AlignTop,
+            description_text
+        )
+        
+        # Calculate number of lines needed
+        line_height = font_metrics.lineSpacing()
+        num_lines = max(1, (text_rect.height() // line_height) + 1)
+        
+        # Set row height: ensure minimum height, add padding
+        row_height = max(
+            self.verticalHeader().defaultSectionSize(),
+            (num_lines * line_height) + 10  # 10px padding
+        )
+        
+        self.setRowHeight(row_idx, row_height)
+    
+    def _recalculateAllRowHeights(self):
+        """Recalculate heights for all rows based on current description column width"""
+        for row in range(self.rowCount()):
+            desc_item = self.item(row, 1)
+            if desc_item:
+                desc_text = desc_item.text()
+                self._recalculateRowHeight(row, desc_text)
         
     def resizeEvent(self, event):
         """Override resize event to adjust columns on window resize"""
         super().resizeEvent(event)
         
-        # When the widget is resized, we want to ensure proper column sizing
+        # When the widget is resized, update all cell widgets immediately
+        # This ensures buttons resize smoothly during window resize
         if self.model() and self.model().columnCount() > 0:
-            QApplication.processEvents()
+            # Schedule widget updates for the next event loop iteration
+            # This ensures smooth updates without blocking the resize
+            QTimer.singleShot(0, self._updateAllCellWidgets)
+    
+    def _updateAllCellWidgets(self):
+        """Update all cell widget geometries after resize"""
+        for col in range(self.columnCount()):
+            for row in range(self.rowCount()):
+                widget = self.cellWidget(row, col)
+                if widget:
+                    # Force geometry update - Qt will recalculate based on cell size
+                    widget.updateGeometry()
+                    widget.update()
     
     def resizeColumnsToContents(self):
         """Override to improve performance"""
@@ -782,10 +603,28 @@ class EnhancedTableWidget(QTableWidget):
             self.showColumn(column)
             
     def resetColumnWidths(self):
-        """Reset all column widths to stretch mode temporarily, then back to interactive"""
-        self.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        QApplication.processEvents()
-        self.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        """Reset all column widths to proportional sizes"""
+        header = self.horizontalHeader()
+        total_width = self.viewport().width()
+        column_count = self.columnCount()
+        
+        # Calculate proportional widths
+        if column_count > 0:
+            # URL and Description get more space
+            url_width = int(total_width * 0.25)
+            desc_width = int(total_width * 0.25)
+            remaining_width = total_width - url_width - desc_width
+            other_width = int(remaining_width / max(1, column_count - 2))
+            
+            # Apply widths smoothly
+            header.resizeSection(0, url_width)
+            header.resizeSection(1, desc_width)
+            for i in range(2, column_count):
+                header.resizeSection(i, other_width)
+                self.column_widths[i] = other_width
+            
+            self.column_widths[0] = url_width
+            self.column_widths[1] = desc_width
         
     def getColumnVisibilityState(self):
         """Return a dictionary of column visibility states"""
@@ -808,8 +647,53 @@ class EnhancedTableWidget(QTableWidget):
 
     def autoFitColumn(self, logicalIndex):
         """Auto-resize column to fit contents on double-click"""
+        # Temporarily switch to ResizeToContents mode for this column
+        header = self.horizontalHeader()
+        old_mode = header.sectionResizeMode(logicalIndex)
+        header.setSectionResizeMode(logicalIndex, QHeaderView.ResizeToContents)
         self.resizeColumnToContents(logicalIndex)
-        QApplication.processEvents()
+        # Get the calculated width
+        width = header.sectionSize(logicalIndex)
+        # Switch back to Interactive mode
+        header.setSectionResizeMode(logicalIndex, QHeaderView.Interactive)
+        # Set the width explicitly for smooth transition
+        header.resizeSection(logicalIndex, width)
+        self.column_widths[logicalIndex] = width
+    
+    def showRowContextMenu(self, position):
+        """Show context menu when right-clicking on a table row"""
+        item = self.itemAt(position)
+        if item is None:
+            return
+        
+        row = item.row()
+        menu = QMenu(self)
+        
+        # Delete action
+        delete_action = QAction("Delete Repository", self)
+        delete_action.setIcon(QIcon.fromTheme("edit-delete"))
+        delete_action.triggered.connect(lambda: self.parent().deleteSelectedRepos())
+        menu.addAction(delete_action)
+        
+        # Add separator
+        menu.addSeparator()
+        
+        # Update action
+        update_action = QAction("Update Repository", self)
+        update_action.triggered.connect(lambda: self.parent().updateSelectedRepos())
+        menu.addAction(update_action)
+        
+        # Show menu at cursor position
+        menu.exec_(self.viewport().mapToGlobal(position))
+    
+    def keyPressEvent(self, event):
+        """Handle keyboard shortcuts"""
+        if event.key() == Qt.Key_Delete:
+            # Delete key pressed - delete selected repos
+            if self.parent():
+                self.parent().deleteSelectedRepos()
+            return
+        super().keyPressEvent(event)
 
 class ColumnManagerDialog(QDialog):
     """Dialog for managing table columns (show/hide/reorder)"""
@@ -981,7 +865,14 @@ class RepoSaverGUI(QWidget):
         self.columnManagerBtn.clicked.connect(self.showColumnManager)
         topControlsLayout.addWidget(self.columnManagerBtn)
         
-        # Add stretcher to push the button to the right
+        # Delete Selected Button
+        self.deleteBtn = QPushButton("Delete Selected")
+        self.deleteBtn.setIcon(QIcon.fromTheme("edit-delete"))
+        self.deleteBtn.setToolTip("Delete selected repositories (or press Delete key)")
+        self.deleteBtn.clicked.connect(self.deleteSelectedRepos)
+        topControlsLayout.addWidget(self.deleteBtn)
+        
+        # Add stretcher to push the buttons to the right
         topControlsLayout.addStretch(1)
         
         # Add to main layout
@@ -1004,6 +895,9 @@ class RepoSaverGUI(QWidget):
         # Make the table non-editable by default
         self.repoTable.setEditTriggers(QTableWidget.NoEditTriggers)
         
+        # Enable word wrapping for the description column
+        self.repoTable.setWordWrap(True)
+        
         # Enable real-time visual feedback during column resizing
         self.repoTable.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.repoTable.horizontalHeader().setStretchLastSection(False)
@@ -1012,13 +906,12 @@ class RepoSaverGUI(QWidget):
         self.repoTable.horizontalHeader().setSectionsMovable(False)
         self.repoTable.horizontalHeader().setSectionsClickable(True)
         
-        # Set default widths - initially stretch to fill available space
-        self.repoTable.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        QApplication.processEvents()  # Force layout update
+        # Set default widths - use proportional sizing initially
+        # This prevents the stretch/jump when switching modes
+        self.repoTable.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         
-        # After initial layout, switch back to interactive mode
-        # This allows columns to be resized while maintaining their proportions
-        QTimer.singleShot(100, self.setupColumnWidths)
+        # Set initial column widths after a short delay to ensure table is rendered
+        QTimer.singleShot(50, self.setupColumnWidths)
         
         mainLayout.addWidget(self.repoTable)
 
@@ -1105,6 +998,49 @@ class RepoSaverGUI(QWidget):
         for repo_url, info in self.repoData.items():
             self.addTableRow(repo_url, info)
 
+    def _adjustRowHeight(self, row_idx, description_text):
+        """
+        Adjust row height based on description text content.
+        Calculates how many lines the description needs and sets row height accordingly.
+        """
+        if not description_text:
+            # Default height for empty descriptions
+            self.repoTable.setRowHeight(row_idx, self.repoTable.verticalHeader().defaultSectionSize())
+            return
+        
+        # Get the description column width
+        desc_col_width = self.repoTable.columnWidth(1)
+        if desc_col_width <= 0:
+            # If column width not available yet, use a default
+            desc_col_width = 200
+        
+        # Account for padding/margins (subtract ~20px for cell padding)
+        available_width = max(100, desc_col_width - 20)
+        
+        # Get font metrics to calculate text height
+        font = self.repoTable.font()
+        font_metrics = QFontMetrics(font)
+        
+        # Calculate how many lines the text will wrap to
+        text_rect = font_metrics.boundingRect(
+            0, 0, available_width, 0,
+            Qt.TextWordWrap | Qt.AlignLeft | Qt.AlignTop,
+            description_text
+        )
+        
+        # Calculate number of lines needed
+        line_height = font_metrics.lineSpacing()
+        num_lines = max(1, (text_rect.height() // line_height) + 1)
+        
+        # Set row height: base height + padding for each line
+        # Add extra padding for readability
+        row_height = max(
+            self.repoTable.verticalHeader().defaultSectionSize(),
+            (num_lines * line_height) + 10  # 10px padding
+        )
+        
+        self.repoTable.setRowHeight(row_idx, row_height)
+    
     def addTableRow(self, repo_url, info):
         """
         Insert a row in the QTableWidget for the given repo.
@@ -1118,12 +1054,19 @@ class RepoSaverGUI(QWidget):
         url_item.setFlags(url_item.flags() & ~Qt.ItemIsEditable)  # Make non-editable
         self.repoTable.setItem(row_idx, 0, url_item)
 
-        # 1. Description - Make read-only
+        # 1. Description - Make read-only with word wrapping
         desc = info.get("online_description", "")
         desc_item = QTableWidgetItem(desc)
         desc_item.setToolTip(desc)  # Add tooltip for full description on hover
         desc_item.setFlags(desc_item.flags() & ~Qt.ItemIsEditable)  # Make non-editable
+        # Enable word wrapping for description - align text to top-left
+        desc_item.setTextAlignment(Qt.AlignTop | Qt.AlignLeft)
+        # Enable word wrap by setting the item to wrap text
         self.repoTable.setItem(row_idx, 1, desc_item)
+        
+        # Calculate row height based on description content
+        # Use a small delay to ensure column widths are set
+        QTimer.singleShot(50, lambda: self._adjustRowHeight(row_idx, desc))
 
         # 2. Status
         status = info.get("status", "")
@@ -1159,16 +1102,20 @@ class RepoSaverGUI(QWidget):
         # 5. "Open Folder" button
         btn_folder = QPushButton("Folder")
         btn_folder.clicked.connect(lambda _, u=repo_url: self.openRepoFolder(u))
+        # Enable smooth resizing for buttons
+        btn_folder.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.repoTable.setCellWidget(row_idx, 5, btn_folder)
 
         # 6. "Archives" button
         btn_arch = QPushButton("Archives")
         btn_arch.clicked.connect(lambda _, u=repo_url: self.showArchives(u))
+        btn_arch.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.repoTable.setCellWidget(row_idx, 6, btn_arch)
 
         # 7. "README" button
         btn_readme = QPushButton("README")
         btn_readme.clicked.connect(lambda _, u=repo_url: self.viewReadme(u))
+        btn_readme.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.repoTable.setCellWidget(row_idx, 7, btn_readme)
 
     def addRepo(self):
@@ -1186,20 +1133,15 @@ class RepoSaverGUI(QWidget):
         # **Reload** the JSON so we don't lose existing data
         all_data = load_cloned_info()
 
-        # If brand-new, add an entry
+        # If brand-new, add an entry using backend function
         if url not in all_data:
-            all_data[url] = {
-                "last_cloned": "",
-                "last_updated": "",
-                "local_path": os.path.join(DATA_FOLDER, url.split("/")[-1]),
-                "online_description": "",
-                "status": "pending"
-            }
-            save_cloned_info(all_data)
-            # Also update self.repoData in memory
-            self.repoData = all_data
-            # Add a table row for the new entry
-            self.addTableRow(url, all_data[url])
+            if add_repo_to_database(url):
+                # Reload to get the updated data
+                all_data = load_cloned_info()
+                # Also update self.repoData in memory
+                self.repoData = all_data
+                # Add a table row for the new entry
+                self.addTableRow(url, all_data[url])
 
         self.addRepoEdit.clear()
 
@@ -1335,7 +1277,11 @@ class RepoSaverGUI(QWidget):
                 desc_item = QTableWidgetItem(desc)
                 desc_item.setToolTip(desc)  # Add tooltip for full description on hover
                 desc_item.setFlags(desc_item.flags() & ~Qt.ItemIsEditable)  # Make non-editable
+                desc_item.setTextAlignment(Qt.AlignTop | Qt.AlignLeft)
                 self.repoTable.setItem(r, 1, desc_item)
+                
+                # Adjust row height based on description
+                self._adjustRowHeight(r, desc)
                 
                 # Update status with color coding
                 status = info.get("status", "")
@@ -1388,12 +1334,35 @@ class RepoSaverGUI(QWidget):
         self.appendLog("Refreshed repo statuses.\n")
 
     def openRepoFolder(self, repo_url):
-        info = self.repoData.get(repo_url, {})
-        path = info.get("local_path", "")
-        if path and os.path.isdir(path):
-            self.openInFinder(path)
-        else:
-            QMessageBox.information(self, "Folder Not Found", f"No local folder for {repo_url}")
+        """Open the repository folder in the system file manager."""
+        try:
+            info = self.repoData.get(repo_url, {})
+            if not info:
+                QMessageBox.warning(self, "Repository Not Found", f"Repository not found in database:\n{repo_url}")
+                return
+            
+            path = info.get("local_path", "")
+            if not path:
+                QMessageBox.information(self, "Folder Not Found", f"No local path configured for:\n{repo_url}")
+                return
+            
+            if os.path.isdir(path):
+                self.openInFinder(path)
+            else:
+                QMessageBox.information(
+                    self, 
+                    "Folder Not Found", 
+                    f"The local folder does not exist:\n{path}\n\n"
+                    f"Repository: {repo_url}\n\n"
+                    f"Try updating the repository first."
+                )
+        except Exception as e:
+            logging.error(f"Error opening repo folder: {e}")
+            QMessageBox.critical(
+                self, 
+                "Error", 
+                f"An error occurred while opening the folder:\n{str(e)}"
+            )
 
     def showArchives(self, repo_url):
         info = self.repoData.get(repo_url, {})
@@ -1405,38 +1374,183 @@ class RepoSaverGUI(QWidget):
         dlg.exec_()
 
     def viewReadme(self, repo_url):
+        """View README.md file with markdown parsing and rendering."""
         info = self.repoData.get(repo_url, {})
         path = info.get("local_path", "")
         if not path or not os.path.isdir(path):
             QMessageBox.information(self, "Repo Not Found", "Clone/update the repo first.")
             return
-        readme_path = os.path.join(path, "README.md")
-        if not os.path.isfile(readme_path):
-            QMessageBox.information(self, "No README", "No README.md found.")
+        
+        # Try to find README file (case-insensitive, various extensions)
+        readme_files = [
+            "README.md", "readme.md", "Readme.md", "README.MD",
+            "README.txt", "readme.txt", "README", "readme"
+        ]
+        readme_path = None
+        for filename in readme_files:
+            test_path = os.path.join(path, filename)
+            if os.path.isfile(test_path):
+                readme_path = test_path
+                break
+        
+        if not readme_path:
+            QMessageBox.information(self, "No README", "No README file found in this repository.")
             return
 
-        with open(readme_path, "r", encoding="utf-8", errors="ignore") as f:
-            content = f.read()
+        try:
+            with open(readme_path, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to read README file:\n{str(e)}")
+            return
 
         dlg = QDialog(self)
         dlg.setWindowTitle(f"README - {os.path.basename(path)}")
         lyt = QVBoxLayout()
         txt = QTextEdit()
         txt.setReadOnly(True)
-        txt.setPlainText(content)
+        # Set light mode background
+        txt.setStyleSheet("background-color: #ffffff; color: #24292e;")
+        
+        # Parse markdown if available and file is .md
+        if MARKDOWN_AVAILABLE and readme_path.lower().endswith('.md'):
+            try:
+                # Convert markdown to HTML
+                html_content = markdown.markdown(
+                    content,
+                    extensions=['extra', 'codehilite', 'tables', 'fenced_code']
+                )
+                
+                # Add CSS styling for better appearance (light mode)
+                styled_html = f"""
+                <html>
+                <head>
+                    <style>
+                        body {{
+                            font-family: Helvetica, Arial, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+                            line-height: 1.6;
+                            color: #24292e;
+                            background-color: #ffffff;
+                            padding: 20px;
+                            max-width: 900px;
+                            margin: 0 auto;
+                        }}
+                        h1, h2, h3, h4, h5, h6 {{
+                            color: #24292e;
+                            margin-top: 24px;
+                            margin-bottom: 16px;
+                        }}
+                        h1 {{ border-bottom: 2px solid #eaecef; padding-bottom: 8px; }}
+                        h2 {{ border-bottom: 1px solid #eaecef; padding-bottom: 8px; }}
+                        code {{
+                            background-color: #f6f8fa;
+                            color: #24292e;
+                            border-radius: 3px;
+                            padding: 2px 6px;
+                            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'Courier New', monospace;
+                            font-size: 85%;
+                        }}
+                        pre {{
+                            background-color: #f6f8fa;
+                            color: #24292e;
+                            border-radius: 6px;
+                            padding: 16px;
+                            overflow-x: auto;
+                            line-height: 1.45;
+                        }}
+                        pre code {{
+                            background-color: transparent;
+                            padding: 0;
+                        }}
+                        blockquote {{
+                            border-left: 4px solid #dfe2e5;
+                            padding-left: 16px;
+                            color: #6a737d;
+                            background-color: #f9f9f9;
+                            margin-left: 0;
+                        }}
+                        table {{
+                            border-collapse: collapse;
+                            width: 100%;
+                            margin: 16px 0;
+                            background-color: #ffffff;
+                        }}
+                        th, td {{
+                            border: 1px solid #dfe2e5;
+                            padding: 8px 12px;
+                            background-color: #ffffff;
+                        }}
+                        th {{
+                            background-color: #f6f8fa;
+                            font-weight: 600;
+                            color: #24292e;
+                        }}
+                        td {{
+                            color: #24292e;
+                        }}
+                        a {{
+                            color: #0366d6;
+                            text-decoration: none;
+                        }}
+                        a:hover {{
+                            text-decoration: underline;
+                        }}
+                        img {{
+                            max-width: 100%;
+                            height: auto;
+                        }}
+                        ul, ol {{
+                            padding-left: 30px;
+                        }}
+                        li {{
+                            margin: 4px 0;
+                        }}
+                    </style>
+                </head>
+                <body>
+                    {html_content}
+                </body>
+                </html>
+                """
+                txt.setHtml(styled_html)
+            except Exception as e:
+                logging.error(f"Error parsing markdown: {e}")
+                # Fallback to plain text if markdown parsing fails
+                txt.setPlainText(content)
+        else:
+            # Plain text display if markdown library not available or not a .md file
+            if not MARKDOWN_AVAILABLE:
+                # Add a note that markdown parsing is not available
+                content_with_note = content + "\n\n---\nNote: Install 'markdown' package for formatted markdown rendering."
+            txt.setPlainText(content)
+        
         lyt.addWidget(txt)
         dlg.setLayout(lyt)
-        dlg.resize(600, 400)
+        dlg.resize(800, 600)
         dlg.exec_()
 
     def openInFinder(self, path):
-        """Cross-platform folder open."""
-        if sys.platform.startswith("darwin"):
-            subprocess.run(["open", path])
-        elif os.name == "nt":
-            os.startfile(path)
-        else:
-            subprocess.run(["xdg-open", path])
+        """Cross-platform folder open with error handling."""
+        if not path or not os.path.exists(path):
+            QMessageBox.warning(self, "Path Not Found", f"The path does not exist:\n{path}")
+            return
+        
+        try:
+            if sys.platform.startswith("darwin"):
+                subprocess.run(["open", path], check=True, timeout=5)
+            elif os.name == "nt":
+                os.startfile(path)
+            else:
+                subprocess.run(["xdg-open", path], check=True, timeout=5)
+        except subprocess.CalledProcessError as e:
+            logging.error(f"Failed to open folder: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to open folder:\n{path}\n\nError: {str(e)}")
+        except subprocess.TimeoutExpired:
+            logging.error(f"Timeout opening folder: {path}")
+            QMessageBox.warning(self, "Timeout", f"Timeout while trying to open folder:\n{path}")
+        except Exception as e:
+            logging.error(f"Unexpected error opening folder: {e}")
+            QMessageBox.critical(self, "Error", f"Unexpected error opening folder:\n{path}\n\nError: {str(e)}")
 
     def appendLog(self, msg):
         self.logText.append(msg)
@@ -1466,66 +1580,34 @@ class RepoSaverGUI(QWidget):
         # Also do an immediate check
         QTimer.singleShot(5000, self.checkDailyUpdate)
         
-        # Add last update time to config
-        self.last_auto_update = self.getLastAutoUpdateTime()
+        # Get last update time from config
+        self.last_auto_update = get_last_auto_update_time()
         
-    def getLastAutoUpdateTime(self):
-        """Get the timestamp of the last auto-update from a config file."""
-        config_file = "auto_update_config.json"
-        if os.path.exists(config_file):
-            try:
-                with open(config_file, "r") as f:
-                    config = json.load(f)
-                    return config.get("last_auto_update")
-            except Exception as e:
-                logging.error(f"Error loading auto-update config: {e}")
-        return None
-        
-    def saveLastAutoUpdateTime(self, timestamp):
-        """Save the timestamp of the last auto-update to a config file."""
-        config_file = "auto_update_config.json"
-        config = {"last_auto_update": timestamp}
-        try:
-            with open(config_file, "w") as f:
-                json.dump(config, f)
-        except Exception as e:
-            logging.error(f"Error saving auto-update config: {e}")
-    
     def checkDailyUpdate(self):
         """Check if it's been 24h since the last update, and if so, update all repos."""
+        should_run, last_update = should_run_auto_update()
+        
+        if not should_run:
+            return
+        
         now = datetime.datetime.now()
         now_str = now.strftime("%Y-%m-%d %H:%M:%S")
         
-        if self.last_auto_update is None:
-            # First time, just save the current time
-            self.last_auto_update = now_str
-            self.saveLastAutoUpdateTime(now_str)
-            return
-            
-        # Parse the last update time
-        try:
-            last_time = datetime.datetime.strptime(self.last_auto_update, "%Y-%m-%d %H:%M:%S")
-            time_diff = now - last_time
-            
-            # If it's been more than 24 hours, do an update
-            if time_diff.total_seconds() >= 86400:  # 24 hours in seconds
-                self.appendLog(f"Starting scheduled daily update at {now_str}")
-                
-                # Update all repos
-                for repo_url in self.repoData.keys():
-                    # Only queue if not already being processed
-                    with self.queue_lock:
-                        if repo_url not in self.active_urls:
-                            self.queue.put(repo_url)
-                
-                # Save the new time
-                self.last_auto_update = now_str
-                self.saveLastAutoUpdateTime(now_str)
-                
-                # Also run status check
-                self.refreshStatuses()
-        except Exception as e:
-            logging.error(f"Error in daily update check: {e}")
+        self.appendLog(f"Starting scheduled daily update at {now_str}")
+        
+        # Update all repos
+        for repo_url in self.repoData.keys():
+            # Only queue if not already being processed
+            with self.queue_lock:
+                if repo_url not in self.active_urls:
+                    self.queue.put(repo_url)
+        
+        # Save the new time
+        save_last_auto_update_time(now_str)
+        self.last_auto_update = now_str
+        
+        # Also run status check
+        self.refreshStatuses()
 
     def updateAllRepos(self):
         """Manually trigger an update of all repositories."""
@@ -1776,34 +1858,149 @@ class RepoSaverGUI(QWidget):
         dialog.exec_()
 
     def setupColumnWidths(self):
-        """Set up column widths after initial layout"""
-        # Switch to interactive mode for manual resizing
+        """Set up column widths after initial layout with smooth sizing"""
+        self._adjustColumnWidthsToFill()
+    
+    def _adjustColumnWidthsToFill(self):
+        """Adjust column widths to fill the full table width proportionally"""
         header = self.repoTable.horizontalHeader()
+        
+        # Ensure we're in interactive mode
         header.setSectionResizeMode(QHeaderView.Interactive)
         
-        # Ensure columns maintain default widths but allow resizing
+        # Get available width
         total_width = self.repoTable.viewport().width()
         column_count = self.repoTable.columnCount()
         
-        # Calculate initial column widths
-        # First 2 columns (URL, Description) get more space
-        url_width = int(total_width * 0.25)  # 25% for URL
-        desc_width = int(total_width * 0.25)  # 25% for Description
-        
-        # Remaining 50% distributed among other columns
-        remaining_width = total_width - url_width - desc_width
-        other_column_width = int(remaining_width / (column_count - 2))
-        
-        # Set widths
-        header.resizeSection(0, url_width)  # URL
-        header.resizeSection(1, desc_width)  # Description
-        
-        # Set remaining column widths
-        for i in range(2, column_count):
-            header.resizeSection(i, other_column_width)
+        if total_width > 0 and column_count > 0:
+            # Calculate proportional widths
+            # First 2 columns (URL, Description) get more space
+            url_width = max(150, int(total_width * 0.25))  # Minimum 150px, 25% of width
+            desc_width = max(150, int(total_width * 0.25))  # Minimum 150px, 25% of width
             
-        # Ensure visual updates
-        self.repoTable.viewport().update()
+            # Remaining width distributed among other columns
+            remaining_width = total_width - url_width - desc_width
+            other_column_width = max(80, int(remaining_width / max(1, column_count - 2)))
+            
+            # Set widths smoothly
+            header.resizeSection(0, url_width)  # URL
+            header.resizeSection(1, desc_width)  # Description
+            
+            # Set remaining column widths
+            for i in range(2, column_count):
+                header.resizeSection(i, other_column_width)
+            
+            # Store widths for future reference
+            if hasattr(self.repoTable, 'column_widths'):
+                self.repoTable.column_widths[0] = url_width
+                self.repoTable.column_widths[1] = desc_width
+                for i in range(2, column_count):
+                    self.repoTable.column_widths[i] = other_column_width
+    
+    def resizeEvent(self, event):
+        """Handle window resize - adjust columns to fill full width"""
+        super().resizeEvent(event)
+        
+        # Adjust column widths to fill the table when window is resized
+        # Use a small delay to ensure the table has updated its size
+        QTimer.singleShot(10, self._adjustColumnWidthsToFill)
+        # Also recalculate row heights after columns are adjusted
+        QTimer.singleShot(50, self._recalculateAllRowHeights)
+    
+    def _recalculateAllRowHeights(self):
+        """Recalculate heights for all rows based on current description column width"""
+        for row in range(self.repoTable.rowCount()):
+            desc_item = self.repoTable.item(row, 1)
+            if desc_item:
+                desc_text = desc_item.text()
+                self._adjustRowHeight(row, desc_text)
+    
+    def getSelectedRepoUrls(self):
+        """Get list of repository URLs for currently selected rows"""
+        selected_rows = set()
+        for item in self.repoTable.selectedItems():
+            selected_rows.add(item.row())
+        
+        repo_urls = []
+        for row in selected_rows:
+            url_item = self.repoTable.item(row, 0)
+            if url_item:
+                repo_urls.append(url_item.text())
+        
+        return repo_urls
+    
+    def deleteSelectedRepos(self):
+        """Delete selected repositories from the database and table"""
+        selected_urls = self.getSelectedRepoUrls()
+        
+        if not selected_urls:
+            QMessageBox.information(self, "No Selection", "Please select one or more repositories to delete.")
+            return
+        
+        # Confirm deletion
+        if len(selected_urls) == 1:
+            confirm_msg = f"Are you sure you want to delete this repository?\n\n{selected_urls[0]}"
+        else:
+            confirm_msg = f"Are you sure you want to delete {len(selected_urls)} repositories?"
+        
+        reply = QMessageBox.question(
+            self,
+            "Confirm Deletion",
+            confirm_msg + "\n\nNote: This will remove the repository from the list, but local files and archives will remain.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        
+        if reply != QMessageBox.Yes:
+            return
+        
+        # Delete from database
+        results = delete_multiple_repos_from_database(selected_urls)
+        
+        # Count successes and failures
+        deleted_count = sum(1 for success in results.values() if success)
+        failed_count = len(results) - deleted_count
+        
+        # Remove from in-memory data
+        for repo_url in selected_urls:
+            if repo_url in self.repoData:
+                del self.repoData[repo_url]
+        
+        # Reload table to reflect changes
+        self.populateTable()
+        
+        # Show result message
+        if deleted_count > 0:
+            self.appendLog(f"Deleted {deleted_count} repository/repositories from the list.")
+            if failed_count > 0:
+                QMessageBox.warning(
+                    self,
+                    "Partial Success",
+                    f"Deleted {deleted_count} repository/repositories.\n{failed_count} could not be deleted."
+                )
+        else:
+            QMessageBox.warning(self, "Deletion Failed", "No repositories were deleted.")
+    
+    def updateSelectedRepos(self):
+        """Update selected repositories"""
+        selected_urls = self.getSelectedRepoUrls()
+        
+        if not selected_urls:
+            QMessageBox.information(self, "No Selection", "Please select one or more repositories to update.")
+            return
+        
+        # Queue selected repos for update
+        count = 0
+        for repo_url in selected_urls:
+            with self.queue_lock:
+                if repo_url not in self.active_urls:
+                    self.queue.put(repo_url)
+                    count += 1
+        
+        if count > 0:
+            self.appendLog(f"Queued {count} repository/repositories for update.")
+        else:
+            QMessageBox.information(self, "No Updates", "Selected repositories are already being processed.")
 
 
 ###############################################################################
@@ -1820,14 +2017,44 @@ def main():
         original_stderr = sys.stderr
         class QtWarningFilter:
             def write(self, text):
-                # Only write non-Qt warnings to original stderr
-                if not any(msg in text for msg in ["QVector<int>", "QTextCursor", "qRegisterMetaType"]):
-                    original_stderr.write(text)
+                # Filter out common Qt warnings that don't affect functionality
+                if text:
+                    # Skip Qt meta type registration warnings
+                    skip_patterns = [
+                        "QVector<int>",
+                        "QTextCursor",
+                        "qRegisterMetaType",
+                        "QObject::connect",
+                        "Cannot queue arguments",
+                        "Make sure",
+                        "IMKClient subclass",
+                        "IMKInputSession subclass",
+                        "chose IMK"
+                    ]
+                    if not any(pattern in text for pattern in skip_patterns):
+                        original_stderr.write(text)
             def flush(self):
                 original_stderr.flush()
         sys.stderr = QtWarningFilter()
         
     app = QApplication(sys.argv)
+    
+    # Fix font warning by using a font that actually exists on macOS
+    # Don't use -apple-system, use the system default or a specific font
+    font = app.font()
+    if sys.platform.startswith("darwin"):
+        # Use Helvetica Neue which exists on macOS and won't cause warnings
+        # If it doesn't exist, Qt will fall back to the default font
+        try:
+            test_font = font
+            test_font.setFamily("Helvetica Neue")
+            # Verify the font exists by checking if it's available
+            if test_font.exactMatch():
+                font = test_font
+        except:
+            pass  # Use default font if Helvetica Neue isn't available
+    app.setFont(font)
+    
     gui = RepoSaverGUI()
     gui.show()
     sys.exit(app.exec_())

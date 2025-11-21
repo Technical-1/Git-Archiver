@@ -1,0 +1,4 @@
+# This file ensures the config directory is tracked by git
+# Configuration files (cloned_repos.json, auto_update_config.json) are gitignored
+# but the directory structure is preserved
+

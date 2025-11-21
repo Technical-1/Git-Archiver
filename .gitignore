@@ -1,17 +1,58 @@
-# Python cache files
+# Python
 __pycache__/
 *.py[cod]
-*.log
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# Compressed archives
-*.tar.gz
-*.zip
-*.xz
-*.zst
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
 
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 .DS_Store
-links.txt
-src/main-links.txt
-cloned_repos.json
 
+# Application data
 data/
+config/cloned_repos.json
+config/auto_update_config.json
+example_repos.txt
+
+# Logs
+*.log
+logs/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Flask
+instance/
+.webassets-cache
+
+# Environment variables
+.env
+.env.local

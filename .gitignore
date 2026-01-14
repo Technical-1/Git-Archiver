@@ -32,13 +32,27 @@ ENV/
 *.swp
 *.swo
 *~
+
+# macOS
 .DS_Store
+._*
 
 # Application data
 data/
-config/cloned_repos.json
-config/auto_update_config.json
+config/
+cloned_repos.json
+cloned_repos.json.bak
+cloned_repos.json.backup
+auto_update_config.json
+settings.json
+links.txt
+*-links.txt
 example_repos.txt
+
+# Backup and temp files
+*.bak
+*.tmp
+*.corrupted.bak
 
 # Logs
 *.log

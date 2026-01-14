@@ -1,152 +1,168 @@
-# GitHub Repo Saver
+# Git-Archiver
 
-Automatically clone, update, and archive GitHub repositories with version control and compression.
+A PyQt5 desktop application for cloning, tracking, and archiving GitHub repositories with version control and compression.
 
 ## Features
 
-- ✅ **Repository Management** - Add, update, delete, and track GitHub repositories
-- ✅ **Automatic Updates** - Hourly checks with 24-hour update intervals
-- ✅ **Versioned Archives** - Creates compressed `tar.xz` archives for each update
-- ✅ **Incremental Archives** - Only archives changed files to save disk space (70-90% reduction)
-- ✅ **Status Detection** - Detects archived/deleted repositories via GitHub API
-- ✅ **GraphQL Batch API** - Efficiently batches GitHub API requests (up to 100 repos per query)
-- ✅ **Multiple Interfaces** - Web app, desktop GUI, and command-line interface
-- ✅ **Search & Filter** - Real-time search and status filtering (web app)
-- ✅ **Export/Import** - Export repository lists to JSON, import from JSON
-- ✅ **Statistics Dashboard** - View totals, disk usage, and archive counts
-- ✅ **Real-time Updates** - Live log streaming via Server-Sent Events (web app)
+- **Repository Management** - Add, update, delete, and track GitHub repositories
+- **Automatic Updates** - Hourly checks with 24-hour update intervals
+- **Versioned Archives** - Creates compressed `.tar.xz` archives for each update
+- **Incremental Archives** - Only archives changed files to save disk space (70-90% reduction)
+- **Status Detection** - Detects archived/deleted repositories via GitHub API
+- **Multiple Interfaces** - Desktop GUI and headless CLI for automation
+- **Search & Filter** - Real-time search and status filtering
+- **Context Menus** - Right-click actions (Copy URL, Open on GitHub, Update, Delete)
+- **GitHub Token Support** - Configurable token for higher API rate limits
 
-## Quick Start
+## Installation
 
-1. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
+```bash
+# Clone the repository
+git clone https://github.com/yourusername/Git-Archiver.git
+cd Git-Archiver
 
-2. **Choose your interface:**
-   - **CLI** `python src/github_repo_saver_cli.py add https://github.com/user/repo`
-   - **Web App**: `python src/github_repo_saver_web.py` then open `http://localhost:5001`
-   - **Desktop GUI**: `python src/github_repo_saver_gui.py`
+# Create virtual environment (recommended)
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+```
 
 ## Usage
 
-### Command Line Interface (Recommended for Automation)
-
-Full-featured CLI for automation and scripting:
+### Desktop GUI
 
 ```bash
-# Add a repository
-python src/github_repo_saver_cli.py add https://github.com/user/repo
-
-# Add repositories from file (one URL per line)
-python src/github_repo_saver_cli.py add-bulk repos.txt
-
-# Update all repositories
-python src/github_repo_saver_cli.py update
-
-# Update a specific repository
-python src/github_repo_saver_cli.py update https://github.com/user/repo
-
-# List all repositories
-python src/github_repo_saver_cli.py list
-
-# List repositories by status
-python src/github_repo_saver_cli.py list --status archived
-
-# Delete a repository
-python src/github_repo_saver_cli.py delete https://github.com/user/repo
-
-# Refresh repository statuses
-python src/github_repo_saver_cli.py refresh-statuses
-
-# Show statistics
-python src/github_repo_saver_cli.py stats
+python run.py
 ```
 
-### Web Application
+Or run as a module:
+```bash
+python -m src
+```
 
-Modern, responsive web interface accessible from any browser:
+### Headless CLI (for automation/cron)
 
-1. **Run the server:**
-   ```bash
-   python src/github_repo_saver_web.py
-   ```
+```bash
+# Process only pending repositories
+python run.py --headless
 
-2. **Open your browser:**
-   Navigate to `http://localhost:5001`
+# Update all repositories
+python run.py --headless --update-all
 
-3. **Features:**
-   - Add repositories (single or bulk)
-   - Search and filter repositories
-   - Sortable table columns
-   - View archives and README files
-   - Export/import repository lists
-   - Real-time statistics dashboard
-   - Live activity log
+# Include archived/deleted repos in processing
+python run.py --headless --update-all --include-archived
 
-### Desktop GUI (Legacy)
-
-Native desktop application using PyQt5:
-
-1. **Run the GUI:**
-   ```bash
-   python src/github_repo_saver_gui.py
-   ```
-
-2. **Features:**
-   - Add repositories via "Add Repo" or "Bulk Upload"
-   - View repository status, descriptions, and timestamps
-   - Open folders, view archives, and read README files
-   - Update individual or all repositories
-   - Delete repositories from the list
+# Import URLs from file before processing
+python run.py --headless --import-file urls.txt
+```
 
 ## Project Structure
 
 ```
-Git-Archiver-1/
-├── src/                    # Main Python source code
-│   ├── repo_manager.py     # Backend logic (core functionality)
-│   ├── github_repo_saver_gui.py    # Desktop GUI (PyQt5)
-│   ├── github_repo_saver_web.py    # Web application (Flask)
-│   └── github_repo_saver_cli.py    # Command-line interface
-├── templates/              # Flask HTML templates
-│   └── index.html
-├── static/                 # Flask static files
-│   ├── css/
-│   │   └── style.css
-│   └── js/
-│       └── app.js
-├── config/                 # Configuration files (auto-generated)
-│   ├── cloned_repos.json   # Repository database
-│   └── auto_update_config.json  # Auto-update settings
-├── data/                   # Cloned repositories (auto-generated)
-│   └── [repo-name].git/
-│       ├── [repo files]
-│       └── versions/       # Archived versions
-├── requirements.txt        # Python dependencies
-└── README.md              # This file
+Git-Archiver/
+├── run.py                    # Convenience entry point
+├── requirements.txt          # Python dependencies
+├── src/
+│   ├── __init__.py           # Package init with version
+│   ├── __main__.py           # Module entry point
+│   ├── main.py               # Application entry point
+│   ├── cli.py                # Headless CLI mode
+│   ├── config.py             # Settings and constants
+│   ├── utils.py              # Utility functions
+│   ├── data_store.py         # JSON persistence with recovery
+│   ├── github_api.py         # GitHub API with rate limiting
+│   ├── repo_manager.py       # Core repository operations
+│   └── gui/
+│       ├── __init__.py
+│       ├── main_window.py    # Main GUI window
+│       ├── widgets.py        # Enhanced table widget
+│       ├── dialogs.py        # Settings and archive dialogs
+│       └── workers.py        # Background QThread workers
+├── scripts/
+│   ├── sync_repos.py         # Sync JSON with disk state
+│   ├── repair_json.py        # Recover corrupted JSON
+│   └── create_fresh_json.py  # Create new JSON database
+├── tests/                    # Unit tests
+├── data/                     # Cloned repositories (gitignored)
+│   └── <repo>.git/
+│       └── versions/         # Archived versions
+│           └── <timestamp>.tar.xz
+├── cloned_repos.json         # Repository database (gitignored)
+├── settings.json             # User settings (gitignored)
+└── CLAUDE.md                 # Development documentation
 ```
 
 ## How It Works
 
-1. **Add Repositories** - Provide GitHub repository URLs (one or many)
-2. **Automatic Cloning** - Repositories are cloned to the `data/` folder
-3. **Daily Checks** - The app checks hourly for updates (updates if 24h passed)
-4. **Versioned Archives** - When updates are detected, compressed archives are created
-5. **Status Tracking** - Monitors repository status (active/archived/deleted) via GitHub API
+1. **Add Repositories** - Provide GitHub repository URLs via GUI or text file
+2. **Clone** - Repositories are cloned as bare `.git` directories to `data/`
+3. **Track** - Repository metadata is stored in `cloned_repos.json`
+4. **Monitor** - GitHub API checks repository status (active/archived/deleted)
+5. **Archive** - When updates are detected, compressed archives are created
+6. **Version** - Archives are timestamped and stored in `versions/` subdirectory
 
-## Performance Optimizations
+## Data Flow
 
-- **GitHub API Caching** - Thread-safe cache with 5-minute TTL reduces API calls by 80-90%
-- **GraphQL Batch API** - Batch fetches up to 100 repositories per query, reducing API calls by 90%+
-- **Incremental Archives** - Only archives changed files, reducing archive sizes by 70-90%
-- **Smart Git Pulls** - Checks for updates before pulling, skipping unnecessary operations
-- **Shallow Clones** - Uses `--depth 1` by default for 5-10x faster initial clones
-- **Async Archive Creation** - Archives are created in background threads, keeping the UI responsive
-- **Thread-Safe Operations** - All file operations are protected to prevent data corruption
+```
+URLs → cloned_repos.json → data/<repo>.git/ → versions/<timestamp>.tar.xz
+       (tracking DB)       (git clone)        (compressed archives)
+```
 
-**Performance**: Bulk updates of 100 repos take ~5-8 minutes (60% faster than before). GraphQL batching reduces API rate limit issues significantly.
+## Repository Status Values
 
-## Roadmap / Future Tasks
+| Status | Description |
+|--------|-------------|
+| `pending` | Not yet cloned |
+| `active` | Live repository on GitHub |
+| `archived` | Archived on GitHub (read-only) |
+| `deleted` | Not found (404) or private |
+| `error` | Clone/pull failed |
 
-Feel free to contribute additional features!
+## Configuration
+
+### GitHub Token (Optional but Recommended)
+
+Without a token: 60 API requests/hour
+With a token: 5,000 API requests/hour
+
+Configure via GUI Settings dialog or add to `settings.json`:
+```json
+{
+  "github_token": "ghp_your_token_here"
+}
+```
+
+## Utility Scripts
+
+```bash
+# Sync JSON database with actual disk data
+python scripts/sync_repos.py --add-missing
+
+# Recover data from corrupted JSON
+python scripts/repair_json.py
+
+# Create fresh JSON database
+python scripts/create_fresh_json.py
+```
+
+## Performance
+
+- **Shallow Clones** - Uses `--depth 1` for 5-10x faster initial clones
+- **Smart Updates** - Checks for changes before pulling
+- **Incremental Archives** - Only archives modified files
+- **Async Archives** - Background threads keep UI responsive
+- **API Caching** - 5-minute cache reduces redundant API calls
+
+## Requirements
+
+- Python 3.8+
+- PyQt5
+- requests
+- Git (command line)
+- tar (for archive creation)
+
+## License
+
+MIT License

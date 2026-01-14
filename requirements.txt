@@ -1,7 +1,11 @@
-# Python requirements for the GitHub Repo Saver web app
+# Git-Archiver Dependencies
 # Install via: pip install -r requirements.txt
 
-flask
-flask-cors
-requests
-markdown
+# GUI Framework
+PyQt5>=5.15.0
+
+# HTTP Requests
+requests>=2.25.0
+
+# Optional: For running tests
+pytest>=7.0.0

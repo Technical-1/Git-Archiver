@@ -18,7 +18,7 @@ A PyQt5 desktop application for cloning, tracking, and archiving GitHub reposito
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/Git-Archiver.git
+git clone https://github.com/Technical-1/Git-Archiver.git
 cd Git-Archiver
 
 # Create virtual environment (recommended)
@@ -65,7 +65,7 @@ Git-Archiver/
 ├── run.py                    # Convenience entry point
 ├── requirements.txt          # Python dependencies
 ├── src/
-│   ├── __init__.py           # Package init with version
+│   ├── __init__.py           # Package init (v2.0.0)
 │   ├── __main__.py           # Module entry point
 │   ├── main.py               # Application entry point
 │   ├── cli.py                # Headless CLI mode
@@ -84,11 +84,17 @@ Git-Archiver/
 │   ├── sync_repos.py         # Sync JSON with disk state
 │   ├── repair_json.py        # Recover corrupted JSON
 │   └── create_fresh_json.py  # Create new JSON database
-├── tests/                    # Unit tests
+├── tests/
+│   ├── test_config.py        # Config and settings tests
+│   ├── test_data_store.py    # JSON persistence tests
+│   ├── test_github_api.py    # GitHub API tests
+│   ├── test_repo_manager.py  # Core operations tests
+│   └── test_utils.py         # Utility function tests
 ├── data/                     # Cloned repositories (gitignored)
 │   └── <repo>.git/
 │       └── versions/         # Archived versions
-│           └── <timestamp>.tar.xz
+│           ├── <timestamp>.tar.xz
+│           └── <timestamp>.json  # Archive metadata
 ├── cloned_repos.json         # Repository database (gitignored)
 ├── settings.json             # User settings (gitignored)
 └── CLAUDE.md                 # Development documentation
@@ -158,11 +164,16 @@ python scripts/create_fresh_json.py
 ## Requirements
 
 - Python 3.8+
-- PyQt5
-- requests
+- PyQt5 >= 5.15.0
+- requests >= 2.25.0
 - Git (command line)
-- tar (for archive creation)
+- tar (with XZ compression support)
+- pytest >= 7.0.0 (for running tests)
 
 ## License
 
 MIT License
+
+## Author
+
+Jacob Kanfer - [GitHub](https://github.com/Technical-1)

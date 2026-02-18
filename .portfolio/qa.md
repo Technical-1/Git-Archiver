@@ -119,10 +119,14 @@ Additionally, all writes use an atomic pattern (write to `.tmp`, then rename) to
 
 Shallow clones (`--depth 1`) are 5-10x faster and use significantly less disk space. For archiving purposes, I primarily care about the current state of the code, not the full commit history. If historical commits are needed, the original GitHub repo (if still available) or a full clone could be created separately.
 
-### Q10: How do I contribute or report issues?
+### Q10: Why did you refactor from a monolithic to modular architecture?
+
+The original v1.x codebase was a single 2,064-line GUI file that mixed UI, business logic, and data access. As features grew, it became difficult to test and maintain. In v2.0.0, I split the codebase into focused modules: `repo_manager.py` for business logic, `data_store.py` for persistence, `github_api.py` for API calls, and a `gui/` package with separated window, workers, dialogs, and widgets. This made the code testable (5 test modules with 60+ tests) and easier to extend.
+
+### Q11: How do I contribute or report issues?
 
 The repository includes comprehensive documentation in `README.md` and `CLAUDE.md` (development notes). The codebase is organized into clear modules with docstrings. Key areas for contribution include:
 - Adding support for GitLab/Bitbucket
 - Implementing archive deduplication
 - Adding export/import for repository lists
-- Improving the archive browsing dialog
+- Removing legacy monolithic files once migration is fully verified

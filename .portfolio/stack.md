@@ -2,7 +2,7 @@
 
 ## Overview
 
-Git-Archiver is a desktop application built with Python and PyQt5 that provides both GUI and CLI interfaces for archiving GitHub repositories.
+Git-Archiver (v2.0.0) is a desktop application built with Python and PyQt5 that provides both GUI and CLI interfaces for archiving GitHub repositories. The codebase was refactored from a monolithic architecture into a modular package structure with separated concerns.
 
 ## Frontend
 
@@ -94,11 +94,12 @@ This is a desktop application with no server infrastructure. All data is stored 
 
 ```
 ~/Git-Archiver/
-├── src/                    # Application code
+├── src/                    # Application code (v2.0.0)
+├── scripts/                # Utility scripts
+├── tests/                  # Unit tests (pytest)
 ├── data/                   # Cloned repos and archives
 ├── cloned_repos.json       # Repository database
-├── settings.json           # User settings (token, window size)
-└── auto_update_config.json # Last update timestamp
+└── settings.json           # User settings (token, window size)
 ```
 
 ### Automation Support

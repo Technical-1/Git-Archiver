@@ -201,15 +201,30 @@ Git-Archiver/
 │   ├── sync_repos.py             # JSON/disk synchronization
 │   ├── repair_json.py            # JSON recovery
 │   └── create_fresh_json.py      # Fresh database creation
+├── tests/
+│   ├── test_config.py            # Config and settings tests
+│   ├── test_data_store.py        # JSON persistence tests
+│   ├── test_github_api.py        # GitHub API tests
+│   ├── test_repo_manager.py      # Core operations tests
+│   └── test_utils.py             # Utility function tests
 ├── data/                         # Repository storage
 │   └── <repo-name>.git/
 │       └── versions/
 │           ├── 20250114-120000.tar.xz
 │           └── 20250114-120000.json
 ├── cloned_repos.json             # Repository database
-├── settings.json                 # User settings
-└── auto_update_config.json       # Auto-update timestamp
+└── settings.json                 # User settings
 ```
+
+## Legacy Code
+
+The codebase was refactored from a monolithic architecture (v1.x) into the current modular structure (v2.0.0). Three legacy files remain in `src/` for reference but are not actively used:
+
+| File | Lines | Replaced By |
+|------|-------|-------------|
+| `github_repo_saver_gui.py` | 2,064 | `src/gui/` package |
+| `github_repo_saver_cli.py` | 351 | `src/cli.py` |
+| `github_repo_saver_web.py` | 619 | Not actively maintained |
 
 ## Limitations
 

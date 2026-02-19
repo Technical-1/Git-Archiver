@@ -3,4 +3,5 @@
 
 pub mod git;
 pub mod github_api;
+pub mod hasher;
 pub mod url;

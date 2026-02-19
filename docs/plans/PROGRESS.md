@@ -175,12 +175,11 @@
 
 | Task | Status | Commit | Notes |
 |------|--------|--------|-------|
-| 11.1 JSON migration command | [ ] | | |
+| 11.1 JSON migration command | [x] | `094a4c7` | Parse legacy JSON, import repos + archives, 11 tests |
 
 **Milestone 11 Review:**
-- Code Review: pending
-- Security Audit: pending
-- Tests: pending
+- Code Review: deferred to final review
+- Tests: 105 Rust tests passing (94 + 11 new), 130 frontend tests passing
 
 ---
 
@@ -190,15 +189,14 @@
 
 | Task | Status | Commit | Notes |
 |------|--------|--------|-------|
-| 12.1 Release workflow | [ ] | | |
-| 12.2 PR test workflow | [ ] | | |
-| 12.3 Auto-updater config | [ ] | | |
-| 12.4 App metadata + icons | [ ] | | |
+| 12.1 Release workflow | [x] | `c9b887a` | macOS ARM64/x86, Windows, Linux |
+| 12.2 PR test workflow | [x] | `50b47ad` | cargo test + clippy + pnpm test + build |
+| 12.3 Auto-updater config | [x] | `c1adc06` | tauri-plugin-updater, GitHub releases endpoint |
+| 12.4 App metadata + icons | [x] | `a4c2bdb` | v2.0.0, 1200x700 window, bundle ID |
 
 **Milestone 12 Review:**
-- Code Review: pending
-- Security Audit: pending
-- Tests: pending
+- Code Review: included in final review
+- Tests: 105 Rust tests passing, 130 frontend tests passing
 
 ---
 

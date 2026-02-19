@@ -2,6 +2,7 @@ use reqwest::Client;
 use serde::Deserialize;
 
 use crate::error::AppError;
+use crate::models::RepoStatus;
 
 /// Information about a GitHub repository from the API.
 #[derive(Debug, Clone)]
@@ -264,6 +265,40 @@ impl GitHubClient {
             reset: data.resources.core.reset,
         })
     }
+
+    /// Detect repository statuses (active/archived/deleted) for multiple repos.
+    /// Uses batch GraphQL if token available, REST fallback otherwise.
+    pub async fn detect_repo_statuses(
+        &self,
+        repos: &[(String, String)],
+    ) -> Result<Vec<(String, String, RepoStatus)>, AppError> {
+        if repos.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Convert to borrowed tuples for batch_get_repo_info
+        let borrowed: Vec<(&str, &str)> = repos
+            .iter()
+            .map(|(o, n)| (o.as_str(), n.as_str()))
+            .collect();
+
+        let infos = self.batch_get_repo_info(&borrowed).await?;
+
+        let mut results = Vec::with_capacity(repos.len());
+        for (i, info) in infos.into_iter().enumerate() {
+            let (owner, name) = &repos[i];
+            let status = if info.not_found {
+                RepoStatus::Deleted
+            } else if info.archived {
+                RepoStatus::Archived
+            } else {
+                RepoStatus::Active
+            };
+            results.push((owner.clone(), name.clone(), status));
+        }
+
+        Ok(results)
+    }
 }
 
 #[cfg(test)]
@@ -425,5 +460,45 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].description, Some("REST fallback".into()));
+    }
+
+    #[tokio::test]
+    async fn test_detect_statuses() {
+        let mut server = mockito::Server::new_async().await;
+        // active repo
+        server
+            .mock("GET", "/repos/owner/active")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"description":"Active","archived":false,"private":false}"#)
+            .create_async()
+            .await;
+        // archived repo
+        server
+            .mock("GET", "/repos/owner/old")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"description":"Old","archived":true,"private":false}"#)
+            .create_async()
+            .await;
+        // deleted repo
+        server
+            .mock("GET", "/repos/owner/gone")
+            .with_status(404)
+            .create_async()
+            .await;
+
+        let client = GitHubClient::new(None, Some(server.url()));
+        let repos = vec![
+            ("owner".into(), "active".into()),
+            ("owner".into(), "old".into()),
+            ("owner".into(), "gone".into()),
+        ];
+        let statuses = client.detect_repo_statuses(&repos).await.unwrap();
+
+        assert_eq!(statuses.len(), 3);
+        assert_eq!(statuses[0].2, RepoStatus::Active);
+        assert_eq!(statuses[1].2, RepoStatus::Archived);
+        assert_eq!(statuses[2].2, RepoStatus::Deleted);
     }
 }

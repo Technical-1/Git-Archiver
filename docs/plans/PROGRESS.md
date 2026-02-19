@@ -36,15 +36,15 @@
 
 | Task | Status | Commit | Notes |
 |------|--------|--------|-------|
-| 2.1 Database migrations | [ ] | | |
-| 2.2 Repository CRUD | [ ] | | |
-| 2.3 Archive CRUD | [ ] | | |
-| 2.4 Settings + file hash CRUD | [ ] | | |
+| 2.1 Database migrations | [x] | `d965ddc` | Schema versioning, WAL, FK enforcement |
+| 2.2 Repository CRUD | [x] | `bc573f3` | 10 functions, full CRUD |
+| 2.3 Archive CRUD | [x] | `be09d84` | 4 functions, cascade delete |
+| 2.4 Settings + file hash CRUD | [x] | `a54aae6` | Key allowlist, transaction wrap |
 
 **Milestone 2 Review:**
-- Code Review: pending
-- Security Audit: pending
-- Tests: pending
+- Code Review: PASS — all spec requirements met
+- Security Audit: MEDIUM — 5 MEDIUM, 4 LOW findings, all fixed in `d526fff`
+- Tests: 29/29 passing (25 original + 4 new from review fixes)
 
 ---
 
@@ -223,6 +223,8 @@
 |------|-----------|----------|--------|--------------|------------|
 | 2026-02-18 | M1 | Code Review | PASS | Title, dead_code, greet placeholder | Fixed in `8e637ea` |
 | 2026-02-18 | M1 | Security Audit | 3H/4M/2L | CSP null, token in AppSettings, error leak, path exposure, opener scope, release profile, tokio features | All fixed in `8e637ea` |
+| 2026-02-18 | M2 | Code Review | PASS | unwrap_or in migrations, missing tests, is_private/local_path gap | Fixed in `d526fff` |
+| 2026-02-18 | M2 | Security Audit | 5M/4L | Custom error bypass, FK timing, input validation, settings allowlist, transaction atomicity | Fixed in `d526fff` |
 
 ---
 

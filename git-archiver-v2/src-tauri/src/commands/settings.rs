@@ -30,14 +30,14 @@ pub async fn save_settings(
     // Save token to keychain if provided
     if let Some(ref token_value) = token {
         let entry = keyring::Entry::new("git-archiver", "github-token")
-            .map_err(|e| AppError::Keyring(e))?;
+            .map_err(AppError::Keyring)?;
         if token_value.is_empty() {
             // Empty string means clear the token
             let _ = entry.delete_credential();
         } else {
             entry
                 .set_password(token_value)
-                .map_err(|e| AppError::Keyring(e))?;
+                .map_err(AppError::Keyring)?;
         }
     }
 

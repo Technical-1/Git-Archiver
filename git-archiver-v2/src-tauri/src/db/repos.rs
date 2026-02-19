@@ -211,6 +211,7 @@ pub fn delete_repo(conn: &Connection, id: i64) -> Result<(), AppError> {
 }
 
 /// Get count of repositories grouped by status.
+#[allow(dead_code)]
 pub fn get_repo_count_by_status(conn: &Connection) -> Result<HashMap<String, i64>, AppError> {
     let mut stmt = conn.prepare("SELECT status, COUNT(*) FROM repositories GROUP BY status")?;
     let rows = stmt.query_map([], |row| {

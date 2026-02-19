@@ -23,6 +23,7 @@ pub fn get_setting(conn: &Connection, key: &str) -> Result<Option<String>, AppEr
 
 /// Set a setting value (insert or update).
 /// Only keys in `ALLOWED_SETTING_KEYS` are accepted.
+#[allow(dead_code)]
 pub fn set_setting(conn: &Connection, key: &str, value: &str) -> Result<(), AppError> {
     if !ALLOWED_SETTING_KEYS.contains(&key) {
         return Err(AppError::UserVisible(format!(

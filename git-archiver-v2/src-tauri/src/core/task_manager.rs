@@ -19,8 +19,10 @@ pub enum Task {
     /// Update all tracked repositories.
     UpdateAll { include_archived: bool },
     /// Refresh statuses for all tracked repositories.
+    #[allow(dead_code)]
     RefreshStatuses,
     /// Graceful shutdown sentinel.
+    #[allow(dead_code)]
     Stop,
 }
 
@@ -131,11 +133,13 @@ impl TaskManager {
     }
 
     /// Returns `true` if a task for the given repo ID is currently active.
+    #[allow(dead_code)]
     pub fn is_active(&self, repo_id: i64) -> bool {
         self.active_tasks.contains_key(&repo_id)
     }
 
     /// Returns the number of currently active per-repo tasks.
+    #[allow(dead_code)]
     pub fn active_count(&self) -> usize {
         self.active_tasks.len()
     }

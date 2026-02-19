@@ -2,16 +2,18 @@ use crate::error::AppError;
 
 /// Validates that a URL is a valid GitHub repository URL.
 /// Returns Ok(()) if valid, Err(AppError::UserVisible) if invalid.
+///
 /// Accepts:
-///   - https://github.com/owner/repo
-///   - https://github.com/owner/repo.git
-///   - https://github.com/owner/repo/
-///   - http://github.com/owner/repo (will be normalized to https)
+/// - `https://github.com/owner/repo`
+/// - `https://github.com/owner/repo.git`
+/// - `https://github.com/owner/repo/`
+/// - `http://github.com/owner/repo` (will be normalized to https)
+///
 /// Rejects:
-///   - Empty strings
-///   - Non-GitHub URLs (gitlab.com, etc.)
-///   - URLs missing owner or repo component
-///   - URLs with only owner (no repo)
+/// - Empty strings
+/// - Non-GitHub URLs (gitlab.com, etc.)
+/// - URLs missing owner or repo component
+/// - URLs with only owner (no repo)
 pub fn validate_repo_url(url: &str) -> Result<(), AppError> {
     if url.is_empty() {
         return Err(AppError::UserVisible(
@@ -37,10 +39,10 @@ pub fn validate_repo_url(url: &str) -> Result<(), AppError> {
     }
 
     // Parse the URL to extract the host
-    let without_scheme = if lower.starts_with("https://") {
-        &lower["https://".len()..]
+    let without_scheme = if let Some(s) = lower.strip_prefix("https://") {
+        s
     } else {
-        &lower["http://".len()..]
+        lower.strip_prefix("http://").unwrap()
     };
 
     // Host must be github.com
@@ -76,9 +78,9 @@ pub fn validate_repo_url(url: &str) -> Result<(), AppError> {
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
 
     if segments.len() < 2 {
-        return Err(AppError::UserVisible(format!(
-            "URL is missing the repository name. Expected format: https://github.com/owner/repo."
-        )));
+        return Err(AppError::UserVisible(
+            "URL is missing the repository name. Expected format: https://github.com/owner/repo.".to_string()
+        ));
     }
 
     // Validate owner and repo are non-empty (already guaranteed by filter above)
@@ -95,17 +97,19 @@ pub fn validate_repo_url(url: &str) -> Result<(), AppError> {
 }
 
 /// Normalizes a GitHub URL to canonical form:
-///   - Lowercase owner and repo
-///   - Strip trailing .git
-///   - Strip trailing /
-///   - Ensure https:// (upgrade http://)
+///
+/// - Lowercase owner and repo
+/// - Strip trailing .git
+/// - Strip trailing /
+/// - Ensure https:// (upgrade http://)
+///
 /// Returns the normalized URL string.
 pub fn normalize_repo_url(url: &str) -> String {
     let lower = url.to_lowercase();
 
     // Upgrade http to https
-    let with_https = if lower.starts_with("http://") {
-        format!("https://{}", &lower["http://".len()..])
+    let with_https = if let Some(rest) = lower.strip_prefix("http://") {
+        format!("https://{}", rest)
     } else {
         lower
     };
@@ -127,10 +131,10 @@ pub fn normalize_repo_url(url: &str) -> String {
 /// Returns Err if extraction fails.
 pub fn extract_owner_repo(url: &str) -> Result<(String, String), AppError> {
     // Find the path after github.com
-    let without_scheme = if url.starts_with("https://") {
-        &url["https://".len()..]
-    } else if url.starts_with("http://") {
-        &url["http://".len()..]
+    let without_scheme = if let Some(s) = url.strip_prefix("https://") {
+        s
+    } else if let Some(s) = url.strip_prefix("http://") {
+        s
     } else {
         return Err(AppError::UserVisible(format!(
             "Cannot extract owner/repo from invalid URL: '{}'.",

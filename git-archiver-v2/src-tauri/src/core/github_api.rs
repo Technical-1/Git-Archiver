@@ -7,8 +7,10 @@ use crate::models::RepoStatus;
 /// Information about a GitHub repository from the API.
 #[derive(Debug, Clone)]
 pub struct RepoInfo {
+    #[allow(dead_code)]
     pub description: Option<String>,
     pub archived: bool,
+    #[allow(dead_code)]
     pub is_private: bool,
     pub not_found: bool,
 }

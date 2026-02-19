@@ -26,31 +26,31 @@ pub fn run() {
         .setup(|app| {
             // --- Initialize database ---
             let app_data_dir = app.path().app_data_dir().map_err(|e| {
-                Box::new(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("Failed to resolve app data directory: {}", e),
-                ))
+                Box::new(std::io::Error::other(format!(
+                    "Failed to resolve app data directory: {}",
+                    e
+                )))
             })?;
             std::fs::create_dir_all(&app_data_dir).map_err(|e| {
-                Box::new(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("Failed to create app data directory: {}", e),
-                ))
+                Box::new(std::io::Error::other(format!(
+                    "Failed to create app data directory: {}",
+                    e
+                )))
             })?;
 
             let db_path = app_data_dir.join("git-archiver.db");
             let conn = Connection::open(&db_path).map_err(|e| {
-                Box::new(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("Failed to open database: {}", e),
-                ))
+                Box::new(std::io::Error::other(format!(
+                    "Failed to open database: {}",
+                    e
+                )))
             })?;
 
             run_migrations(&conn).map_err(|e| {
-                Box::new(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("Failed to run database migrations: {}", e),
-                ))
+                Box::new(std::io::Error::other(format!(
+                    "Failed to run database migrations: {}",
+                    e
+                )))
             })?;
 
             // --- Load settings ---

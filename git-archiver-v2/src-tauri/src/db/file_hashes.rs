@@ -43,6 +43,7 @@ pub fn get_file_hashes(
 }
 
 /// Delete all file hashes for a repository.
+#[allow(dead_code)]
 pub fn clear_file_hashes(conn: &Connection, repo_id: i64) -> Result<(), AppError> {
     conn.execute(
         "DELETE FROM file_hashes WHERE repo_id = ?1",

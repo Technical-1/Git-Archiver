@@ -2,6 +2,7 @@ import { ThemeProvider } from "next-themes";
 import { AppHeader } from "@/components/app-header";
 import { AddRepoBar } from "@/components/add-repo-bar";
 import { DataTable } from "@/components/repo-table/data-table";
+import { ActivityLog } from "@/components/activity-log";
 import { Toaster } from "@/components/ui/toaster";
 
 function App() {
@@ -13,6 +14,7 @@ function App() {
           <AddRepoBar />
           <DataTable />
         </main>
+        <ActivityLog />
       </div>
       <Toaster />
     </ThemeProvider>

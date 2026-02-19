@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "git-archiver-v2",
-  "version": "0.1.0",
-  "identifier": "com.jacobkanfer.git-archiver-v2",
+  "productName": "Git Archiver",
+  "version": "2.0.0",
+  "identifier": "com.gitarchiver.app",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
@@ -12,9 +12,11 @@
   "app": {
     "windows": [
       {
-        "title": "git-archiver-v2",
-        "width": 800,
-        "height": 600
+        "title": "Git Archiver",
+        "width": 1200,
+        "height": 700,
+        "minWidth": 800,
+        "minHeight": 500
       }
     ],
     "security": {

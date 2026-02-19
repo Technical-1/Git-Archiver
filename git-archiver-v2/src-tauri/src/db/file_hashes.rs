@@ -112,6 +112,28 @@ mod tests {
     }
 
     #[test]
+    fn test_clear_file_hashes_direct() {
+        let conn = setup_db();
+        let repo_id = insert_test_repo(&conn);
+
+        upsert_file_hash(&conn, repo_id, "file1.txt", "hash1").unwrap();
+        upsert_file_hash(&conn, repo_id, "file2.txt", "hash2").unwrap();
+
+        let hashes = get_file_hashes(&conn, repo_id).unwrap();
+        assert_eq!(hashes.len(), 2);
+
+        // Clear hashes without deleting the repo
+        clear_file_hashes(&conn, repo_id).unwrap();
+
+        let hashes_after = get_file_hashes(&conn, repo_id).unwrap();
+        assert!(hashes_after.is_empty());
+
+        // The repo should still exist
+        let repo = repos::get_repo_by_id(&conn, repo_id).unwrap();
+        assert!(repo.is_some());
+    }
+
+    #[test]
     fn test_clear_hashes_on_repo_delete() {
         let conn = setup_db();
         let repo_id = insert_test_repo(&conn);

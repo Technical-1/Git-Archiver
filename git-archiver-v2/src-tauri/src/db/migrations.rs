@@ -10,23 +10,23 @@ pub fn run_migrations(conn: &Connection) -> Result<(), AppError> {
         "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY);",
     )?;
 
+    // Enable foreign keys before any migration DML that may reference them
+    conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+
+    // Enable WAL mode for concurrent reads
+    conn.pragma_update(None, "journal_mode", "WAL")?;
+
     let current_version: i64 = conn
         .query_row(
             "SELECT COALESCE(MAX(version), 0) FROM schema_version",
             [],
             |row| row.get(0),
-        )
-        .unwrap_or(0);
+        )?;
 
     if current_version < 1 {
         conn.execute_batch(MIGRATION_001)?;
         conn.execute("INSERT INTO schema_version (version) VALUES (1)", [])?;
     }
-
-    // Enable WAL mode for concurrent reads
-    conn.pragma_update(None, "journal_mode", "WAL")?;
-    // Enable foreign keys
-    conn.execute_batch("PRAGMA foreign_keys = ON;")?;
 
     Ok(())
 }

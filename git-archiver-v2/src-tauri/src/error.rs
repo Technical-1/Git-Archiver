@@ -22,6 +22,9 @@ pub enum AppError {
 
     #[error("{0}")]
     Custom(String),
+
+    #[error("{0}")]
+    UserVisible(String),
 }
 
 // Implement Serialize so AppError can be returned from Tauri commands.
@@ -41,7 +44,8 @@ impl serde::Serialize for AppError {
             AppError::Io(_) => "A file system operation failed.",
             AppError::Json(_) => "A data format error occurred.",
             AppError::Keyring(_) => "A credential storage error occurred.",
-            AppError::Custom(msg) => msg.as_str(),
+            AppError::Custom(_) => "An unexpected error occurred.",
+            AppError::UserVisible(msg) => msg.as_str(),
         };
         serializer.serialize_str(safe_message)
     }

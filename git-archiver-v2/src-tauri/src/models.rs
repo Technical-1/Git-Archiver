@@ -33,6 +33,8 @@ pub struct Repository {
     pub url: String,
     pub status: RepoStatus,
     pub description: Option<String>,
+    pub is_private: bool,
+    pub local_path: Option<String>,
     pub last_checked: Option<DateTime<Utc>>,
     pub last_archived: Option<DateTime<Utc>>,
     pub error_message: Option<String>,

@@ -27,8 +27,8 @@ fn parse_optional_datetime(s: Option<String>) -> Option<DateTime<Utc>> {
 ///
 /// Expected column order:
 ///   0: id, 1: owner, 2: name, 3: url, 4: description, 5: status,
-///   6: last_checked, 7: last_updated (mapped to last_archived),
-///   8: error_message, 9: created_at
+///   6: is_private, 7: local_path, 8: last_checked,
+///   9: last_updated (mapped to last_archived), 10: error_message, 11: created_at
 fn row_to_repo(row: &Row) -> Result<Repository, rusqlite::Error> {
     let id: i64 = row.get(0)?;
     let owner: String = row.get(1)?;
@@ -36,17 +36,29 @@ fn row_to_repo(row: &Row) -> Result<Repository, rusqlite::Error> {
     let url: String = row.get(3)?;
     let description: Option<String> = row.get(4)?;
     let status_str: String = row.get(5)?;
-    let last_checked_str: Option<String> = row.get(6)?;
-    let last_updated_str: Option<String> = row.get(7)?;
-    let error_message: Option<String> = row.get(8)?;
-    let created_at_str: String = row.get(9)?;
+    let is_private: bool = row.get(6)?;
+    let local_path: Option<String> = row.get(7)?;
+    let last_checked_str: Option<String> = row.get(8)?;
+    let last_updated_str: Option<String> = row.get(9)?;
+    let error_message: Option<String> = row.get(10)?;
+    let created_at_str: String = row.get(11)?;
 
-    let status = parse_status(&status_str).unwrap_or(RepoStatus::Error);
+    let status = match parse_status(&status_str) {
+        Ok(s) => s,
+        Err(_) => {
+            log::warn!("Unknown repo status '{}' for repo id={}, falling back to Error", status_str, id);
+            RepoStatus::Error
+        }
+    };
     let last_checked = parse_optional_datetime(last_checked_str);
     let last_archived = parse_optional_datetime(last_updated_str);
-    let created_at = created_at_str
-        .parse::<DateTime<Utc>>()
-        .unwrap_or_else(|_| Utc::now());
+    let created_at = match created_at_str.parse::<DateTime<Utc>>() {
+        Ok(dt) => dt,
+        Err(_) => {
+            log::warn!("Failed to parse created_at '{}' for repo id={}, falling back to Utc::now()", created_at_str, id);
+            Utc::now()
+        }
+    };
 
     Ok(Repository {
         id: Some(id),
@@ -55,6 +67,8 @@ fn row_to_repo(row: &Row) -> Result<Repository, rusqlite::Error> {
         url,
         status,
         description,
+        is_private,
+        local_path,
         last_checked,
         last_archived,
         error_message,
@@ -63,7 +77,7 @@ fn row_to_repo(row: &Row) -> Result<Repository, rusqlite::Error> {
 }
 
 const SELECT_COLS: &str =
-    "id, owner, name, url, description, status, last_checked, last_updated, error_message, created_at";
+    "id, owner, name, url, description, status, is_private, local_path, last_checked, last_updated, error_message, created_at";
 
 /// Insert a new repository with pending status.
 pub fn insert_repo(
@@ -334,6 +348,35 @@ mod tests {
 
         let not_found = get_repo_by_url(&conn, "https://github.com/nobody/nothing").unwrap();
         assert!(not_found.is_none());
+    }
+
+    #[test]
+    fn test_update_repo_timestamps() {
+        let conn = setup_db();
+        let repo = insert_repo(&conn, "octocat", "repo", "https://github.com/octocat/repo").unwrap();
+        let id = repo.id.unwrap();
+
+        let now = Utc::now();
+        update_repo_timestamps(&conn, id, Some(now), Some(now), Some(now)).unwrap();
+
+        let updated = get_repo_by_id(&conn, id).unwrap().unwrap();
+        // last_checked and last_archived (mapped from last_updated) should be set
+        assert!(updated.last_checked.is_some());
+        assert!(updated.last_archived.is_some());
+    }
+
+    #[test]
+    fn test_set_repo_local_path() {
+        let conn = setup_db();
+        let repo = insert_repo(&conn, "octocat", "repo", "https://github.com/octocat/repo").unwrap();
+        let id = repo.id.unwrap();
+
+        // Initially local_path should be None
+        assert!(repo.local_path.is_none());
+
+        set_repo_local_path(&conn, id, "/data/octocat/repo.git").unwrap();
+        let updated = get_repo_by_id(&conn, id).unwrap().unwrap();
+        assert_eq!(updated.local_path.as_deref(), Some("/data/octocat/repo.git"));
     }
 
     #[test]

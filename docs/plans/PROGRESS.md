@@ -105,12 +105,12 @@
 
 | Task | Status | Commit | Notes |
 |------|--------|--------|-------|
-| 7.1 Task manager core | [ ] | | |
+| 7.1 Task manager core | [x] | `e03eb74` | mpsc channel, DashMap dedup, Semaphore, CancellationToken, 15 tests |
 
 **Milestone 7 Review:**
-- Code Review: pending
-- Security Audit: pending
-- Tests: pending
+- Code Review: PASS — TOCTOU race in enqueue fixed in `676293d`
+- Security Audit: N/A (no external input handling)
+- Tests: 94 passing (79 existing + 15 new), 2 ignored (network)
 
 ---
 
@@ -214,6 +214,7 @@
 | 2026-02-18 | M2 | Security Audit | 5M/4L | Custom error bypass, FK timing, input validation, settings allowlist, transaction atomicity | Fixed in `d526fff` |
 | 2026-02-18 | M3-6 | Code Review | PASS | Duplicate fetch logic, streaming hashing, UserVisible error variant | Fixed in `281263c` |
 | 2026-02-18 | M3-6 | Security Audit | 1C/3H/2M/2L | Tar slip, GraphQL injection, base_url SSRF, percent-encoded URL bypass, git credential leak, symlink escape | All fixed in `281263c` |
+| 2026-02-18 | M7 | Code Review | PASS | TOCTOU race in enqueue | Fixed in `676293d` |
 
 ---
 

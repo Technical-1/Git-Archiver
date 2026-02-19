@@ -31,5 +31,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/jacobkanfer/Git-Archiver/releases/latest/download/latest.json"
+      ],
+      "pubkey": ""
+    }
   }
 }

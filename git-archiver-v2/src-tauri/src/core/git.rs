@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use git2::build::RepoBuilder;
-use git2::{FetchOptions, RemoteCallbacks};
+use git2::{FetchOptions, RemoteCallbacks, Repository};
 
 use crate::error::AppError;
 
@@ -57,10 +57,106 @@ where
     Ok(())
 }
 
+/// Fetch from origin and check if the local repo is behind.
+/// Returns `true` if there are new commits to pull.
+pub fn fetch_and_check_updates(repo_path: &Path) -> Result<bool, AppError> {
+    let repo = Repository::open(repo_path)?;
+
+    // Fetch from origin
+    let mut remote = repo.find_remote("origin")?;
+    remote.fetch(&["refs/heads/*:refs/remotes/origin/*"], None, None)?;
+    remote.disconnect()?;
+
+    // Compare local HEAD to its upstream (origin) counterpart
+    let head = repo.head()?;
+    let local_oid = head
+        .target()
+        .ok_or_else(|| AppError::Custom("HEAD has no target OID.".to_string()))?;
+
+    // Determine which branch we are on
+    let branch_name = head.shorthand().unwrap_or("main").to_string();
+
+    let remote_ref_name = format!("refs/remotes/origin/{}", branch_name);
+    let remote_ref = repo.find_reference(&remote_ref_name).or_else(|_| {
+        // Fallback: try FETCH_HEAD if the remote branch ref is not found
+        repo.find_reference("FETCH_HEAD")
+    })?;
+
+    let remote_oid = remote_ref
+        .target()
+        .ok_or_else(|| AppError::Custom("Remote ref has no target OID.".to_string()))?;
+
+    Ok(local_oid != remote_oid)
+}
+
+/// Pull latest changes from origin (fetch + fast-forward).
+/// Returns `true` if files were updated, `false` if already up-to-date.
+pub fn pull_repo(repo_path: &Path) -> Result<bool, AppError> {
+    let repo = Repository::open(repo_path)?;
+
+    // Fetch from origin
+    let mut remote = repo.find_remote("origin")?;
+    remote.fetch(&["refs/heads/*:refs/remotes/origin/*"], None, None)?;
+    remote.disconnect()?;
+
+    // Get local HEAD
+    let head = repo.head()?;
+    let local_oid = head
+        .target()
+        .ok_or_else(|| AppError::Custom("HEAD has no target OID.".to_string()))?;
+
+    // Determine which branch we are on
+    let branch_name = head.shorthand().unwrap_or("main").to_string();
+
+    let remote_ref_name = format!("refs/remotes/origin/{}", branch_name);
+    let remote_ref = repo.find_reference(&remote_ref_name).or_else(|_| {
+        repo.find_reference("FETCH_HEAD")
+    })?;
+
+    let remote_oid = remote_ref
+        .target()
+        .ok_or_else(|| AppError::Custom("Remote ref has no target OID.".to_string()))?;
+
+    // Already up to date
+    if local_oid == remote_oid {
+        return Ok(false);
+    }
+
+    // Fast-forward merge
+    let remote_annotated_commit = repo.find_annotated_commit(remote_oid)?;
+    let (merge_analysis, _) = repo.merge_analysis(&[&remote_annotated_commit])?;
+
+    if merge_analysis.is_fast_forward() {
+        // Perform fast-forward by updating the reference
+        let refname = head
+            .name()
+            .ok_or_else(|| AppError::Custom("HEAD reference has no name.".to_string()))?;
+
+        repo.find_reference(refname)?.set_target(
+            remote_oid,
+            &format!("Fast-forward to {}", remote_oid),
+        )?;
+
+        // Update the working tree to match the new HEAD
+        repo.set_head(refname)?;
+        repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))?;
+
+        Ok(true)
+    } else if merge_analysis.is_up_to_date() {
+        Ok(false)
+    } else {
+        Err(AppError::Custom(
+            "Cannot fast-forward: the local branch has diverged from origin.".to_string(),
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    // ========== Task 4.1: Clone tests ==========
 
     #[test]
     fn test_clone_invalid_url_fails() {
@@ -120,6 +216,55 @@ mod tests {
         assert!(
             dest.join(".git").exists(),
             ".git directory should exist after clone"
+        );
+    }
+
+    // ========== Task 4.2: Fetch and Pull tests ==========
+
+    #[test]
+    fn test_fetch_nonexistent_repo_fails() {
+        let tmp = TempDir::new().unwrap();
+        let fake_path = tmp.path().join("nonexistent");
+
+        let result = fetch_and_check_updates(&fake_path);
+        assert!(
+            result.is_err(),
+            "Fetching from a nonexistent path should fail"
+        );
+    }
+
+    #[test]
+    fn test_pull_nonexistent_repo_fails() {
+        let tmp = TempDir::new().unwrap();
+        let fake_path = tmp.path().join("nonexistent");
+
+        let result = pull_repo(&fake_path);
+        assert!(
+            result.is_err(),
+            "Pulling from a nonexistent path should fail"
+        );
+    }
+
+    #[test]
+    #[ignore] // Network test - run manually with: cargo test -- --ignored
+    fn test_clone_and_check_updates() {
+        let tmp = TempDir::new().unwrap();
+        let dest = tmp.path().join("hello-world");
+
+        // First clone the repo
+        clone_repo::<fn(f32, &str) -> bool>(
+            "https://github.com/octocat/Hello-World",
+            &dest,
+            None,
+        )
+        .expect("Clone should succeed");
+
+        // Freshly cloned repo should be up to date
+        let has_updates =
+            fetch_and_check_updates(&dest).expect("fetch_and_check_updates should succeed");
+        assert!(
+            !has_updates,
+            "Freshly cloned repo should not have updates"
         );
     }
 }

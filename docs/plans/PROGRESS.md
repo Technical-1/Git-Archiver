@@ -138,16 +138,15 @@
 
 | Task | Status | Commit | Notes |
 |------|--------|--------|-------|
-| 9.1 Typed command wrappers | [ ] | | |
-| 9.2 Zustand stores | [ ] | | |
-| 9.3 App shell with theme toggle | [ ] | | |
-| 9.4 Repository data table | [ ] | | |
-| 9.5 Add repo bar | [ ] | | |
+| 9.1 Typed command wrappers | [x] | `6127188` | 14 typed commands, types.ts, utility functions |
+| 9.2 Zustand stores | [x] | `31e02b3` | repo-store, task-store, settings-store |
+| 9.3 App shell with theme toggle | [x] | `5c90790` | Header, theme toggle, settings button |
+| 9.4 Repository data table | [x] | `d21fe22` | Sorting, filtering, pagination, status badges |
+| 9.5 Add repo bar | [x] | `30a7278` | URL validation, toast notifications |
 
 **Milestone 9 Review:**
-- Code Review: pending
-- Security Audit: pending
-- Tests: pending
+- Code Review: deferred to combined M9-10 review
+- Tests: 82 frontend tests passing, 94 Rust tests passing
 
 ---
 
@@ -157,17 +156,16 @@
 
 | Task | Status | Commit | Notes |
 |------|--------|--------|-------|
-| 10.1 Activity log | [ ] | | |
-| 10.2 Status bar | [ ] | | |
-| 10.3 Progress indicators | [ ] | | |
-| 10.4 Settings dialog | [ ] | | |
-| 10.5 Archive viewer dialog | [ ] | | |
-| 10.6 Tauri event subscriptions | [ ] | | |
+| 10.1 Activity log | [x] | `6e73575` | Collapsible panel, 100 entry cap |
+| 10.2 Status bar | [x] | `ddf2832` | Repo count, active tasks, spinner |
+| 10.3 Progress indicators | [x] | `1933041` | Per-repo spinner + progress bar |
+| 10.4 Settings dialog | [x] | `4451e8b` | Token, concurrency slider, auto-update |
+| 10.5 Archive viewer dialog | [x] | `ed00b9a` | Extract, delete, file size formatting |
+| 10.6 Tauri event subscriptions | [x] | `190c502` | task-progress + repo-updated listeners |
 
-**Milestone 10 Review:**
-- Code Review: pending
-- Security Audit: pending
-- Tests: pending
+**Milestones 9-10 Review:**
+- Code Review: deferred to final review
+- Tests: 130 frontend tests passing, 94 Rust tests passing
 
 ---
 

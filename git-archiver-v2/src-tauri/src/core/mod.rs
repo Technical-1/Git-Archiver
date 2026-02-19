@@ -5,4 +5,5 @@ pub mod archive;
 pub mod git;
 pub mod github_api;
 pub mod hasher;
+pub mod task_manager;
 pub mod url;

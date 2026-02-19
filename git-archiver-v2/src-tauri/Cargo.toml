@@ -20,7 +20,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
 git2 = "0.19"
 reqwest = { version = "0.12", features = ["json"] }
@@ -40,3 +40,10 @@ env_logger = "0.11"
 [dev-dependencies]
 tempfile = "3"
 mockito = "1"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"
+overflow-checks = true

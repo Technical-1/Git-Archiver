@@ -84,10 +84,11 @@ pub struct TaskProgress {
 }
 
 /// Application settings
+/// Note: github_token is NOT stored here. It is managed exclusively
+/// via the `keyring` crate and never serialized to the frontend.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     pub data_dir: String,
-    pub github_token: Option<String>,
     pub archive_format: String,
     pub max_concurrent_tasks: u32,
     pub auto_check_interval_minutes: Option<u32>,
@@ -97,10 +98,40 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             data_dir: "data".to_string(),
-            github_token: None,
             archive_format: "tar.xz".to_string(),
             max_concurrent_tasks: 4,
             auto_check_interval_minutes: None,
+        }
+    }
+}
+
+/// Frontend-safe view of an archive (no internal file paths exposed)
+#[derive(Debug, Clone, Serialize)]
+pub struct ArchiveView {
+    pub id: Option<i64>,
+    pub repo_id: i64,
+    pub filename: String,
+    pub file_size: u64,
+    pub file_count: u32,
+    pub is_incremental: bool,
+    pub created_at: DateTime<Utc>,
+}
+
+impl From<&Archive> for ArchiveView {
+    fn from(archive: &Archive) -> Self {
+        let filename = std::path::Path::new(&archive.file_path)
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        Self {
+            id: archive.id,
+            repo_id: archive.repo_id,
+            filename,
+            file_size: archive.file_size,
+            file_count: archive.file_count,
+            is_incremental: false,
+            created_at: archive.created_at,
         }
     }
 }

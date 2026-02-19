@@ -1,3 +1,6 @@
+src-tauri/target/
+dist/
+
 # Logs
 logs
 *.log

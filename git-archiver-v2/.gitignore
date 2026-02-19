@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# Override root .gitignore patterns that conflict with src/lib/
+!src/lib/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

@@ -128,6 +128,119 @@ impl GitHubClient {
         })
     }
 
+    /// Batch fetch repo info for multiple repos using GraphQL.
+    /// Falls back to individual REST calls if no token or if GraphQL fails.
+    pub async fn batch_get_repo_info(
+        &self,
+        repos: &[(&str, &str)],
+    ) -> Result<Vec<RepoInfo>, AppError> {
+        if repos.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // GraphQL requires authentication
+        if self.token.is_some() {
+            match self.batch_get_repo_info_graphql(repos).await {
+                Ok(results) => return Ok(results),
+                Err(_) => {
+                    // Fall back to REST on GraphQL failure
+                }
+            }
+        }
+
+        // Fallback: individual REST calls
+        let mut results = Vec::with_capacity(repos.len());
+        for (owner, name) in repos {
+            let info = self.get_repo_info(owner, name).await?;
+            results.push(info);
+        }
+        Ok(results)
+    }
+
+    /// Internal: perform batch query via GraphQL API.
+    async fn batch_get_repo_info_graphql(
+        &self,
+        repos: &[(&str, &str)],
+    ) -> Result<Vec<RepoInfo>, AppError> {
+        // Build the GraphQL query with aliased fields
+        let mut query_parts = Vec::with_capacity(repos.len());
+        for (i, (owner, name)) in repos.iter().enumerate() {
+            query_parts.push(format!(
+                r#"repo{}: repository(owner: "{}", name: "{}") {{ description isArchived isPrivate }}"#,
+                i, owner, name
+            ));
+        }
+        let query = format!("query {{ {} }}", query_parts.join(" "));
+
+        let url = format!("{}/graphql", self.base_url);
+        let body = serde_json::json!({ "query": query });
+
+        let response = self
+            .build_request(reqwest::Method::POST, &url)
+            .json(&body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(AppError::Custom(format!(
+                "GraphQL request failed with status {}",
+                response.status()
+            )));
+        }
+
+        let json: serde_json::Value = response.json().await?;
+
+        let data = json
+            .get("data")
+            .ok_or_else(|| AppError::Custom("GraphQL response missing 'data' field".into()))?;
+
+        let mut results = Vec::with_capacity(repos.len());
+        for i in 0..repos.len() {
+            let key = format!("repo{}", i);
+            if let Some(repo_data) = data.get(&key) {
+                if repo_data.is_null() {
+                    // Repository not found in GraphQL means deleted/not accessible
+                    results.push(RepoInfo {
+                        description: None,
+                        archived: false,
+                        is_private: false,
+                        not_found: true,
+                    });
+                } else {
+                    let description = repo_data
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let is_archived = repo_data
+                        .get("isArchived")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let is_private = repo_data
+                        .get("isPrivate")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+
+                    results.push(RepoInfo {
+                        description,
+                        archived: is_archived,
+                        is_private,
+                        not_found: false,
+                    });
+                }
+            } else {
+                // Missing key - treat as not found
+                results.push(RepoInfo {
+                    description: None,
+                    archived: false,
+                    is_private: false,
+                    not_found: true,
+                });
+            }
+        }
+
+        Ok(results)
+    }
+
     /// Get current rate limit status.
     pub async fn get_rate_limit(&self) -> Result<RateLimitInfo, AppError> {
         let url = format!("{}/rate_limit", self.base_url);
@@ -272,5 +385,45 @@ mod tests {
         let client = GitHubClient::new(None, Some(server.url()));
         let result = client.get_repo_info("owner", "repo").await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_batch_get_repo_info() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"data":{"repo0":{"description":"Desc A","isArchived":false,"isPrivate":false},"repo1":{"description":"Desc B","isArchived":true,"isPrivate":false}}}"#)
+            .create_async()
+            .await;
+
+        let client = GitHubClient::new(Some("test-token".into()), Some(server.url()));
+        let repos = vec![("owner1", "repo1"), ("owner2", "repo2")];
+        let results = client.batch_get_repo_info(&repos).await.unwrap();
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].description, Some("Desc A".into()));
+        assert!(results[1].archived);
+    }
+
+    #[tokio::test]
+    async fn test_batch_falls_back_without_token() {
+        // Without a token, GraphQL won't work, so it should fall back to REST
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("GET", "/repos/owner/repo")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"description":"REST fallback","archived":false,"private":false}"#)
+            .create_async()
+            .await;
+
+        let client = GitHubClient::new(None, Some(server.url()));
+        let repos = vec![("owner", "repo")];
+        let results = client.batch_get_repo_info(&repos).await.unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].description, Some("REST fallback".into()));
     }
 }

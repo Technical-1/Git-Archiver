@@ -19,14 +19,14 @@
 
 | Task | Status | Commit | Notes |
 |------|--------|--------|-------|
-| 1.1 Create Tauri v2 project | [ ] | | |
-| 1.2 Configure Rust project structure | [ ] | | |
-| 1.3 Configure React + shadcn/ui + dark mode | [ ] | | |
+| 1.1 Create Tauri v2 project | [x] | `8f4d06d` | Tauri v2 + React 19 + TypeScript |
+| 1.2 Configure Rust project structure | [x] | `8b74b7c` | All deps + module skeleton |
+| 1.3 Configure React + shadcn/ui + dark mode | [x] | `53025bc` | shadcn/ui, Tailwind v3, vitest |
 
 **Milestone 1 Review:**
-- Code Review: pending
-- Security Audit: pending
-- Tests: pending
+- Code Review: PASS (minor items fixed)
+- Security Audit: 3 HIGH, 4 MEDIUM, 2 LOW — all fixed in `8e637ea`
+- Tests: cargo build passes, pnpm test 1/1 pass
 
 ---
 
@@ -221,7 +221,8 @@
 
 | Date | Milestone | Reviewer | Result | Issues Found | Resolution |
 |------|-----------|----------|--------|--------------|------------|
-| | | | | | |
+| 2026-02-18 | M1 | Code Review | PASS | Title, dead_code, greet placeholder | Fixed in `8e637ea` |
+| 2026-02-18 | M1 | Security Audit | 3H/4M/2L | CSP null, token in AppSettings, error leak, path exposure, opener scope, release profile, tokio features | All fixed in `8e637ea` |
 
 ---
 

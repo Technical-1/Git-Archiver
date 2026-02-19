@@ -12,7 +12,7 @@ describe("App", () => {
     expect(screen.getByText("Git Archiver")).toBeInTheDocument();
     // Wait for async effects to settle
     await waitFor(() => {
-      expect(screen.getByText("0 repositories")).toBeInTheDocument();
+      expect(screen.getAllByText("0 repositories").length).toBeGreaterThan(0);
     });
   });
 });

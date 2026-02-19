@@ -3,6 +3,7 @@ import { AppHeader } from "@/components/app-header";
 import { AddRepoBar } from "@/components/add-repo-bar";
 import { DataTable } from "@/components/repo-table/data-table";
 import { ActivityLog } from "@/components/activity-log";
+import { StatusBar } from "@/components/status-bar";
 import { Toaster } from "@/components/ui/toaster";
 
 function App() {
@@ -15,6 +16,7 @@ function App() {
           <DataTable />
         </main>
         <ActivityLog />
+        <StatusBar />
       </div>
       <Toaster />
     </ThemeProvider>

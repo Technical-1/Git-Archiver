@@ -54,12 +54,9 @@
 
 | Task | Status | Commit | Notes |
 |------|--------|--------|-------|
-| 3.1 URL validation module | [ ] | | |
+| 3.1 URL validation module | [x] | `eb6dac1` | 3 functions, 19 tests |
 
-**Milestone 3 Review:**
-- Code Review: pending
-- Security Audit: pending
-- Tests: pending
+**Milestone 3 Review:** (combined with M4-M6 below)
 
 ---
 
@@ -69,13 +66,8 @@
 
 | Task | Status | Commit | Notes |
 |------|--------|--------|-------|
-| 4.1 Git clone with progress | [ ] | | |
-| 4.2 Git fetch and pull | [ ] | | |
-
-**Milestone 4 Review:**
-- Code Review: pending
-- Security Audit: pending
-- Tests: pending
+| 4.1 Git clone with progress | [x] | `0aa2e30` | Shallow clone, progress callback |
+| 4.2 Git fetch and pull | [x] | `a8207a6` | Fast-forward merge |
 
 ---
 
@@ -85,13 +77,8 @@
 
 | Task | Status | Commit | Notes |
 |------|--------|--------|-------|
-| 5.1 File hashing | [ ] | | |
-| 5.2 Archive creation and extraction | [ ] | | |
-
-**Milestone 5 Review:**
-- Code Review: pending
-- Security Audit: pending
-- Tests: pending
+| 5.1 File hashing | [x] | `665a7a6` | MD5 hash + change detection |
+| 5.2 Archive creation and extraction | [x] | `07ba963` | xz2 compression, full + incremental |
 
 ---
 
@@ -101,14 +88,14 @@
 
 | Task | Status | Commit | Notes |
 |------|--------|--------|-------|
-| 6.1 REST API client | [ ] | | |
-| 6.2 GraphQL batch queries | [ ] | | |
-| 6.3 Status detection | [ ] | | |
+| 6.1 REST API client | [x] | `35c1627` | Auth, rate limiting, 404 handling |
+| 6.2 GraphQL batch queries | [x] | `83d30e1` | Aliased fields, REST fallback |
+| 6.3 Status detection | [x] | `3a27252` | Active/archived/deleted mapping |
 
-**Milestone 6 Review:**
-- Code Review: pending
-- Security Audit: pending
-- Tests: pending
+**Milestones 3-6 Review:**
+- Code Review: PASS — 2 critical, 4 important findings identified
+- Security Audit: 1 CRITICAL, 3 HIGH, 2 MEDIUM, 2 LOW — all fixed in `281263c`
+- Tests: 79 passing (73 original + 6 new from review fixes), 2 ignored (network)
 
 ---
 
@@ -225,6 +212,8 @@
 | 2026-02-18 | M1 | Security Audit | 3H/4M/2L | CSP null, token in AppSettings, error leak, path exposure, opener scope, release profile, tokio features | All fixed in `8e637ea` |
 | 2026-02-18 | M2 | Code Review | PASS | unwrap_or in migrations, missing tests, is_private/local_path gap | Fixed in `d526fff` |
 | 2026-02-18 | M2 | Security Audit | 5M/4L | Custom error bypass, FK timing, input validation, settings allowlist, transaction atomicity | Fixed in `d526fff` |
+| 2026-02-18 | M3-6 | Code Review | PASS | Duplicate fetch logic, streaming hashing, UserVisible error variant | Fixed in `281263c` |
+| 2026-02-18 | M3-6 | Security Audit | 1C/3H/2M/2L | Tar slip, GraphQL injection, base_url SSRF, percent-encoded URL bypass, git credential leak, symlink escape | All fixed in `281263c` |
 
 ---
 

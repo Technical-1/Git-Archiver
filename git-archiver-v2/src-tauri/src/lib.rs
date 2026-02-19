@@ -1,3 +1,14 @@
+#[allow(dead_code)]
+mod commands;
+#[allow(dead_code)]
+mod core;
+#[allow(dead_code)]
+mod db;
+#[allow(dead_code)]
+mod error;
+#[allow(dead_code)]
+mod models;
+
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn greet(name: &str) -> String {

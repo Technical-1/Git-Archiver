@@ -23,6 +23,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { ArchiveViewer } from "@/components/dialogs/archive-viewer";
 import { useRepoStore } from "@/stores/repo-store";
 import { toast } from "@/hooks/use-toast";
 import * as commands from "@/lib/commands";
@@ -34,6 +35,7 @@ interface RowActionsProps {
 
 export function RowActions({ repo }: RowActionsProps) {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [archiveViewerOpen, setArchiveViewerOpen] = useState(false);
   const deleteRepo = useRepoStore((s) => s.deleteRepo);
 
   const handleUpdate = async () => {
@@ -109,7 +111,7 @@ export function RowActions({ repo }: RowActionsProps) {
             <ExternalLink className="mr-2 h-4 w-4" />
             Open on GitHub
           </DropdownMenuItem>
-          <DropdownMenuItem disabled>
+          <DropdownMenuItem onClick={() => setArchiveViewerOpen(true)}>
             <Archive className="mr-2 h-4 w-4" />
             View Archives
           </DropdownMenuItem>
@@ -153,6 +155,12 @@ export function RowActions({ repo }: RowActionsProps) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ArchiveViewer
+        repo={repo}
+        open={archiveViewerOpen}
+        onOpenChange={setArchiveViewerOpen}
+      />
     </>
   );
 }

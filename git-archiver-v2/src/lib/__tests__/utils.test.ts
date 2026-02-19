@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { normalizeRepoUrl, isValidGithubUrl, formatRelativeTime } from "../utils";
+import { normalizeRepoUrl, isValidGithubUrl, formatRelativeTime, formatFileSize } from "../utils";
 
 describe("normalizeRepoUrl", () => {
   it("lowercases the URL", () => {
@@ -160,5 +160,37 @@ describe("formatRelativeTime", () => {
 
   it('returns "just now" for future dates', () => {
     expect(formatRelativeTime("2025-06-16T12:00:00Z")).toBe("just now");
+  });
+});
+
+describe("formatFileSize", () => {
+  it("formats 0 bytes", () => {
+    expect(formatFileSize(0)).toBe("0 B");
+  });
+
+  it("formats negative as 0 B", () => {
+    expect(formatFileSize(-100)).toBe("0 B");
+  });
+
+  it("formats bytes", () => {
+    expect(formatFileSize(500)).toBe("500 B");
+  });
+
+  it("formats kilobytes", () => {
+    expect(formatFileSize(1024)).toBe("1.0 KB");
+    expect(formatFileSize(1536)).toBe("1.5 KB");
+  });
+
+  it("formats megabytes", () => {
+    expect(formatFileSize(1048576)).toBe("1.0 MB");
+    expect(formatFileSize(524288)).toBe("512.0 KB");
+  });
+
+  it("formats gigabytes", () => {
+    expect(formatFileSize(1073741824)).toBe("1.0 GB");
+  });
+
+  it("formats terabytes", () => {
+    expect(formatFileSize(1099511627776)).toBe("1.0 TB");
   });
 });

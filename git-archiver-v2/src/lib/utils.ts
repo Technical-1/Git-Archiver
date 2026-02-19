@@ -76,3 +76,20 @@ export function formatRelativeTime(dateStr: string): string {
   if (years === 1) return "1 year ago";
   return `${years} years ago`;
 }
+
+/**
+ * Format a file size in bytes to a human-readable string.
+ * Examples: "1.2 KB", "3.5 MB", "2.1 GB"
+ */
+export function formatFileSize(bytes: number): string {
+  if (bytes < 0) return "0 B";
+  if (bytes === 0) return "0 B";
+
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const k = 1024;
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  const index = Math.min(i, units.length - 1);
+
+  if (index === 0) return `${bytes} B`;
+  return `${(bytes / Math.pow(k, index)).toFixed(1)} ${units[index]}`;
+}

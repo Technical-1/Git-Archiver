@@ -113,6 +113,8 @@ pub fn run() {
             commands::settings::get_settings,
             commands::settings::save_settings,
             commands::settings::check_rate_limit,
+            // Migration commands
+            commands::migrate::migrate_from_json,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

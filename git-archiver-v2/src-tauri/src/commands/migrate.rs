@@ -160,8 +160,7 @@ pub async fn migrate_from_json(
 
         // Update description
         if let Some(ref description) = entry.description {
-            if let Err(e) =
-                db::repos::update_repo_metadata(&db, repo_id, Some(description), false)
+            if let Err(e) = db::repos::update_repo_metadata(&db, repo_id, Some(description), false)
             {
                 errors.push(format!("{}: Failed to update description: {}", url, e));
             }
@@ -184,9 +183,8 @@ pub async fn migrate_from_json(
 
                                 let file_path_str = file_path.to_string_lossy().to_string();
 
-                                let size_bytes = std::fs::metadata(&file_path)
-                                    .map(|m| m.len())
-                                    .unwrap_or(0);
+                                let size_bytes =
+                                    std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
 
                                 match db::archives::insert_archive(
                                     &db,
@@ -242,7 +240,10 @@ mod tests {
         let result = parse_legacy_date("2025-01-01 12:00:00");
         assert!(result.is_some());
         let dt = result.unwrap();
-        assert_eq!(dt.format("%Y-%m-%d %H:%M:%S").to_string(), "2025-01-01 12:00:00");
+        assert_eq!(
+            dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+            "2025-01-01 12:00:00"
+        );
     }
 
     #[test]
@@ -348,8 +349,7 @@ mod tests {
         let mut tmp = NamedTempFile::new().unwrap();
         write!(tmp, "{}", json).unwrap();
 
-        let legacy_data: HashMap<String, LegacyRepoEntry> =
-            serde_json::from_str(json).unwrap();
+        let legacy_data: HashMap<String, LegacyRepoEntry> = serde_json::from_str(json).unwrap();
 
         let mut repos_imported: u32 = 0;
         let errors: Vec<String> = Vec::new();
@@ -442,8 +442,7 @@ mod tests {
         }"#;
 
         let conn = setup_db();
-        let legacy_data: HashMap<String, LegacyRepoEntry> =
-            serde_json::from_str(json).unwrap();
+        let legacy_data: HashMap<String, LegacyRepoEntry> = serde_json::from_str(json).unwrap();
 
         let mut repos_imported: u32 = 0;
         let mut errors: Vec<String> = Vec::new();
@@ -485,13 +484,7 @@ mod tests {
         let conn = setup_db();
 
         // Pre-insert a repo
-        db::repos::insert_repo(
-            &conn,
-            "owner",
-            "repo",
-            "https://github.com/owner/repo",
-        )
-        .unwrap();
+        db::repos::insert_repo(&conn, "owner", "repo", "https://github.com/owner/repo").unwrap();
 
         let json = r#"{
             "https://github.com/owner/repo": {
@@ -510,8 +503,7 @@ mod tests {
             }
         }"#;
 
-        let legacy_data: HashMap<String, LegacyRepoEntry> =
-            serde_json::from_str(json).unwrap();
+        let legacy_data: HashMap<String, LegacyRepoEntry> = serde_json::from_str(json).unwrap();
 
         let mut repos_imported: u32 = 0;
         let mut repos_skipped: u32 = 0;
@@ -563,13 +555,8 @@ mod tests {
         std::fs::write(&not_archive, b"not an archive").unwrap();
 
         // Insert a repo
-        let repo = db::repos::insert_repo(
-            &conn,
-            "owner",
-            "repo",
-            "https://github.com/owner/repo",
-        )
-        .unwrap();
+        let repo = db::repos::insert_repo(&conn, "owner", "repo", "https://github.com/owner/repo")
+            .unwrap();
         let repo_id = repo.id.unwrap();
 
         // Scan for archives (mimicking the migration logic)

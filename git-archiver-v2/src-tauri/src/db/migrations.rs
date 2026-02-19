@@ -6,9 +6,7 @@ const MIGRATION_001: &str = include_str!("../../migrations/001_initial.sql");
 
 pub fn run_migrations(conn: &Connection) -> Result<(), AppError> {
     // Create schema_version table if not exists
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY);",
-    )?;
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY);")?;
 
     // Enable foreign keys before any migration DML that may reference them
     conn.execute_batch("PRAGMA foreign_keys = ON;")?;
@@ -16,12 +14,11 @@ pub fn run_migrations(conn: &Connection) -> Result<(), AppError> {
     // Enable WAL mode for concurrent reads
     conn.pragma_update(None, "journal_mode", "WAL")?;
 
-    let current_version: i64 = conn
-        .query_row(
-            "SELECT COALESCE(MAX(version), 0) FROM schema_version",
-            [],
-            |row| row.get(0),
-        )?;
+    let current_version: i64 = conn.query_row(
+        "SELECT COALESCE(MAX(version), 0) FROM schema_version",
+        [],
+        |row| row.get(0),
+    )?;
 
     if current_version < 1 {
         conn.execute_batch(MIGRATION_001)?;

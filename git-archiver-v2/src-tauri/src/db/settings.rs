@@ -43,18 +43,16 @@ pub fn set_setting(conn: &Connection, key: &str, value: &str) -> Result<(), AppE
 pub fn get_app_settings(conn: &Connection) -> Result<AppSettings, AppError> {
     let defaults = AppSettings::default();
 
-    let data_dir = get_setting(conn, "data_dir")?
-        .unwrap_or(defaults.data_dir);
+    let data_dir = get_setting(conn, "data_dir")?.unwrap_or(defaults.data_dir);
 
-    let archive_format = get_setting(conn, "archive_format")?
-        .unwrap_or(defaults.archive_format);
+    let archive_format = get_setting(conn, "archive_format")?.unwrap_or(defaults.archive_format);
 
     let max_concurrent_tasks = get_setting(conn, "max_concurrent_tasks")?
         .and_then(|v| v.parse::<u32>().ok())
         .unwrap_or(defaults.max_concurrent_tasks);
 
-    let auto_check_interval_minutes = get_setting(conn, "auto_check_interval_minutes")?
-        .and_then(|v| v.parse::<u32>().ok());
+    let auto_check_interval_minutes =
+        get_setting(conn, "auto_check_interval_minutes")?.and_then(|v| v.parse::<u32>().ok());
 
     Ok(AppSettings {
         data_dir,
@@ -93,7 +91,9 @@ pub fn save_app_settings(conn: &mut Connection, settings: &AppSettings) -> Resul
         &settings.max_concurrent_tasks.to_string(),
     )?;
     match &settings.auto_check_interval_minutes {
-        Some(interval) => set_setting_in_tx(&tx, "auto_check_interval_minutes", &interval.to_string())?,
+        Some(interval) => {
+            set_setting_in_tx(&tx, "auto_check_interval_minutes", &interval.to_string())?
+        }
         None => {
             // Remove the key if the value is None
             tx.execute(
@@ -158,7 +158,10 @@ mod tests {
         assert_eq!(settings.data_dir, defaults.data_dir);
         assert_eq!(settings.archive_format, defaults.archive_format);
         assert_eq!(settings.max_concurrent_tasks, defaults.max_concurrent_tasks);
-        assert_eq!(settings.auto_check_interval_minutes, defaults.auto_check_interval_minutes);
+        assert_eq!(
+            settings.auto_check_interval_minutes,
+            defaults.auto_check_interval_minutes
+        );
     }
 
     #[test]

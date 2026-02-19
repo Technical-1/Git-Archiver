@@ -46,7 +46,11 @@ fn row_to_repo(row: &Row) -> Result<Repository, rusqlite::Error> {
     let status = match parse_status(&status_str) {
         Ok(s) => s,
         Err(_) => {
-            log::warn!("Unknown repo status '{}' for repo id={}, falling back to Error", status_str, id);
+            log::warn!(
+                "Unknown repo status '{}' for repo id={}, falling back to Error",
+                status_str,
+                id
+            );
             RepoStatus::Error
         }
     };
@@ -55,7 +59,11 @@ fn row_to_repo(row: &Row) -> Result<Repository, rusqlite::Error> {
     let created_at = match created_at_str.parse::<DateTime<Utc>>() {
         Ok(dt) => dt,
         Err(_) => {
-            log::warn!("Failed to parse created_at '{}' for repo id={}, falling back to Utc::now()", created_at_str, id);
+            log::warn!(
+                "Failed to parse created_at '{}' for repo id={}, falling back to Utc::now()",
+                created_at_str,
+                id
+            );
             Utc::now()
         }
     };
@@ -242,7 +250,13 @@ mod tests {
     #[test]
     fn test_insert_repo() {
         let conn = setup_db();
-        let repo = insert_repo(&conn, "octocat", "Hello-World", "https://github.com/octocat/Hello-World").unwrap();
+        let repo = insert_repo(
+            &conn,
+            "octocat",
+            "Hello-World",
+            "https://github.com/octocat/Hello-World",
+        )
+        .unwrap();
 
         assert!(repo.id.is_some());
         assert_eq!(repo.owner, "octocat");
@@ -258,8 +272,19 @@ mod tests {
     #[test]
     fn test_insert_duplicate_url_fails() {
         let conn = setup_db();
-        insert_repo(&conn, "octocat", "Hello-World", "https://github.com/octocat/Hello-World").unwrap();
-        let result = insert_repo(&conn, "octocat", "Hello-World", "https://github.com/octocat/Hello-World");
+        insert_repo(
+            &conn,
+            "octocat",
+            "Hello-World",
+            "https://github.com/octocat/Hello-World",
+        )
+        .unwrap();
+        let result = insert_repo(
+            &conn,
+            "octocat",
+            "Hello-World",
+            "https://github.com/octocat/Hello-World",
+        );
         assert!(result.is_err());
     }
 
@@ -273,8 +298,10 @@ mod tests {
     #[test]
     fn test_list_repos_with_status_filter() {
         let conn = setup_db();
-        let repo1 = insert_repo(&conn, "owner1", "repo1", "https://github.com/owner1/repo1").unwrap();
-        let repo2 = insert_repo(&conn, "owner2", "repo2", "https://github.com/owner2/repo2").unwrap();
+        let repo1 =
+            insert_repo(&conn, "owner1", "repo1", "https://github.com/owner1/repo1").unwrap();
+        let repo2 =
+            insert_repo(&conn, "owner2", "repo2", "https://github.com/owner2/repo2").unwrap();
 
         // Make repo2 active
         update_repo_status(&conn, repo2.id.unwrap(), &RepoStatus::Active, None).unwrap();
@@ -300,7 +327,8 @@ mod tests {
     #[test]
     fn test_update_repo_status() {
         let conn = setup_db();
-        let repo = insert_repo(&conn, "octocat", "repo", "https://github.com/octocat/repo").unwrap();
+        let repo =
+            insert_repo(&conn, "octocat", "repo", "https://github.com/octocat/repo").unwrap();
         let id = repo.id.unwrap();
 
         update_repo_status(&conn, id, &RepoStatus::Active, None).unwrap();
@@ -318,7 +346,8 @@ mod tests {
     #[test]
     fn test_update_repo_metadata() {
         let conn = setup_db();
-        let repo = insert_repo(&conn, "octocat", "repo", "https://github.com/octocat/repo").unwrap();
+        let repo =
+            insert_repo(&conn, "octocat", "repo", "https://github.com/octocat/repo").unwrap();
         let id = repo.id.unwrap();
 
         update_repo_metadata(&conn, id, Some("A cool repo"), true).unwrap();
@@ -329,7 +358,8 @@ mod tests {
     #[test]
     fn test_delete_repo() {
         let conn = setup_db();
-        let repo = insert_repo(&conn, "octocat", "repo", "https://github.com/octocat/repo").unwrap();
+        let repo =
+            insert_repo(&conn, "octocat", "repo", "https://github.com/octocat/repo").unwrap();
         let id = repo.id.unwrap();
 
         delete_repo(&conn, id).unwrap();
@@ -354,7 +384,8 @@ mod tests {
     #[test]
     fn test_update_repo_timestamps() {
         let conn = setup_db();
-        let repo = insert_repo(&conn, "octocat", "repo", "https://github.com/octocat/repo").unwrap();
+        let repo =
+            insert_repo(&conn, "octocat", "repo", "https://github.com/octocat/repo").unwrap();
         let id = repo.id.unwrap();
 
         let now = Utc::now();
@@ -369,7 +400,8 @@ mod tests {
     #[test]
     fn test_set_repo_local_path() {
         let conn = setup_db();
-        let repo = insert_repo(&conn, "octocat", "repo", "https://github.com/octocat/repo").unwrap();
+        let repo =
+            insert_repo(&conn, "octocat", "repo", "https://github.com/octocat/repo").unwrap();
         let id = repo.id.unwrap();
 
         // Initially local_path should be None
@@ -377,7 +409,10 @@ mod tests {
 
         set_repo_local_path(&conn, id, "/data/octocat/repo.git").unwrap();
         let updated = get_repo_by_id(&conn, id).unwrap().unwrap();
-        assert_eq!(updated.local_path.as_deref(), Some("/data/octocat/repo.git"));
+        assert_eq!(
+            updated.local_path.as_deref(),
+            Some("/data/octocat/repo.git")
+        );
     }
 
     #[test]

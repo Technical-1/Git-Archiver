@@ -28,8 +28,9 @@ pub async fn extract_archive(
     state: State<'_, AppState>,
 ) -> Result<(), AppError> {
     let db = state.db.lock().await;
-    let archive_record = db::archives::get_archive_by_id(&db, archive_id)?
-        .ok_or_else(|| AppError::UserVisible(format!("Archive with ID {} not found.", archive_id)))?;
+    let archive_record = db::archives::get_archive_by_id(&db, archive_id)?.ok_or_else(|| {
+        AppError::UserVisible(format!("Archive with ID {} not found.", archive_id))
+    })?;
     // Drop the lock before the potentially long extraction
     drop(db);
 
@@ -49,15 +50,14 @@ pub async fn extract_archive(
 
 /// Delete an archive: remove the file from disk and the record from the database.
 #[tauri::command]
-pub async fn delete_archive(
-    archive_id: i64,
-    state: State<'_, AppState>,
-) -> Result<(), AppError> {
+pub async fn delete_archive(archive_id: i64, state: State<'_, AppState>) -> Result<(), AppError> {
     // Look up the archive and drop the lock before filesystem I/O
     let file_path = {
         let db = state.db.lock().await;
-        let archive_record = db::archives::get_archive_by_id(&db, archive_id)?
-            .ok_or_else(|| AppError::UserVisible(format!("Archive with ID {} not found.", archive_id)))?;
+        let archive_record =
+            db::archives::get_archive_by_id(&db, archive_id)?.ok_or_else(|| {
+                AppError::UserVisible(format!("Archive with ID {} not found.", archive_id))
+            })?;
         archive_record.file_path.clone()
     };
 

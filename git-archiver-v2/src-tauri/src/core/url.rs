@@ -79,7 +79,8 @@ pub fn validate_repo_url(url: &str) -> Result<(), AppError> {
 
     if segments.len() < 2 {
         return Err(AppError::UserVisible(
-            "URL is missing the repository name. Expected format: https://github.com/owner/repo.".to_string()
+            "URL is missing the repository name. Expected format: https://github.com/owner/repo."
+                .to_string(),
         ));
     }
 

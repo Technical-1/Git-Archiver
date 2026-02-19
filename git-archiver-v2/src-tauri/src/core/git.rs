@@ -10,11 +10,7 @@ use crate::error::AppError;
 ///
 /// `progress_callback`: Optional callback receiving (progress_pct 0.0-1.0, message).
 /// Return `false` from the callback to cancel the clone.
-pub fn clone_repo<F>(
-    url: &str,
-    dest: &Path,
-    progress_callback: Option<F>,
-) -> Result<(), AppError>
+pub fn clone_repo<F>(url: &str, dest: &Path, progress_callback: Option<F>) -> Result<(), AppError>
 where
     F: Fn(f32, &str) -> bool + Send + 'static,
 {
@@ -32,11 +28,7 @@ where
         callbacks.transfer_progress(move |stats| {
             let total = stats.total_objects() as f32;
             let received = stats.received_objects() as f32;
-            let pct = if total > 0.0 {
-                received / total
-            } else {
-                0.0
-            };
+            let pct = if total > 0.0 { received / total } else { 0.0 };
             let msg = format!(
                 "Receiving objects: {}/{}",
                 stats.received_objects(),
@@ -59,7 +51,9 @@ where
 
 /// Fetch from origin and compare local HEAD to the remote counterpart.
 /// Returns `None` if up-to-date, or `Some((local_oid, remote_oid, head_refname))` if updates exist.
-fn fetch_and_compare(repo: &Repository) -> Result<Option<(git2::Oid, git2::Oid, String)>, AppError> {
+fn fetch_and_compare(
+    repo: &Repository,
+) -> Result<Option<(git2::Oid, git2::Oid, String)>, AppError> {
     // Fetch from origin
     let mut remote = repo.find_remote("origin")?;
     remote.fetch(&["refs/heads/*:refs/remotes/origin/*"], None, None)?;
@@ -119,10 +113,8 @@ pub fn pull_repo(repo_path: &Path) -> Result<bool, AppError> {
 
     if merge_analysis.is_fast_forward() {
         // Perform fast-forward by updating the reference
-        repo.find_reference(&refname)?.set_target(
-            remote_oid,
-            &format!("Fast-forward to {}", remote_oid),
-        )?;
+        repo.find_reference(&refname)?
+            .set_target(remote_oid, &format!("Fast-forward to {}", remote_oid))?;
 
         // Update the working tree to match the new HEAD
         repo.set_head(&refname)?;
@@ -173,7 +165,10 @@ mod tests {
             None,
         );
 
-        assert!(result.is_err(), "Cloning into an existing git repo should fail");
+        assert!(
+            result.is_err(),
+            "Cloning into an existing git repo should fail"
+        );
         let err_msg = format!("{}", result.unwrap_err());
         assert!(
             err_msg.contains("already contains a git repository"),
@@ -239,19 +234,12 @@ mod tests {
         let dest = tmp.path().join("hello-world");
 
         // First clone the repo
-        clone_repo::<fn(f32, &str) -> bool>(
-            "https://github.com/octocat/Hello-World",
-            &dest,
-            None,
-        )
-        .expect("Clone should succeed");
+        clone_repo::<fn(f32, &str) -> bool>("https://github.com/octocat/Hello-World", &dest, None)
+            .expect("Clone should succeed");
 
         // Freshly cloned repo should be up to date
         let has_updates =
             fetch_and_check_updates(&dest).expect("fetch_and_check_updates should succeed");
-        assert!(
-            !has_updates,
-            "Freshly cloned repo should not have updates"
-        );
+        assert!(!has_updates, "Freshly cloned repo should not have updates");
     }
 }

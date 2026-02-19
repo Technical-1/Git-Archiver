@@ -308,7 +308,10 @@ mod tests {
         let extract_dir = tmp.path().join("dest");
         let result = extract_archive(&archive_path, &extract_dir);
 
-        assert!(result.is_err(), "Extracting a tar with ../ path should fail");
+        assert!(
+            result.is_err(),
+            "Extracting a tar with ../ path should fail"
+        );
         let err_msg = format!("{}", result.unwrap_err());
         assert!(
             err_msg.contains("path traversal"),

@@ -116,9 +116,8 @@ pub async fn import_from_file(
     path: String,
     state: State<'_, AppState>,
 ) -> Result<BulkAddResult, AppError> {
-    let content = std::fs::read_to_string(&path).map_err(|e| {
-        AppError::UserVisible(format!("Failed to read file '{}': {}", path, e))
-    })?;
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| AppError::UserVisible(format!("Failed to read file '{}': {}", path, e)))?;
 
     let mut added: u32 = 0;
     let mut skipped: u32 = 0;

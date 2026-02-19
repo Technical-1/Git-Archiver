@@ -146,8 +146,8 @@ mod tests {
         .into();
         let new: HashMap<String, String> = [
             ("a.txt".into(), "hash1".into()),    // unchanged
-            ("b.txt".into(), "hash_new".into()),  // changed
-            ("d.txt".into(), "hash4".into()),     // new file
+            ("b.txt".into(), "hash_new".into()), // changed
+            ("d.txt".into(), "hash4".into()),    // new file
         ]
         .into();
 

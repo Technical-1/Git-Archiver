@@ -66,8 +66,7 @@ mod tests {
 
     fn insert_test_repo(conn: &Connection) -> i64 {
         let repo =
-            repos::insert_repo(conn, "octocat", "repo", "https://github.com/octocat/repo")
-                .unwrap();
+            repos::insert_repo(conn, "octocat", "repo", "https://github.com/octocat/repo").unwrap();
         repo.id.unwrap()
     }
 
@@ -101,13 +100,8 @@ mod tests {
         assert_eq!(hashes.get("file2.txt"), Some(&"hash2".to_string()));
 
         // Different repo should return empty
-        let repo2 = repos::insert_repo(
-            &conn,
-            "other",
-            "repo2",
-            "https://github.com/other/repo2",
-        )
-        .unwrap();
+        let repo2 =
+            repos::insert_repo(&conn, "other", "repo2", "https://github.com/other/repo2").unwrap();
         let hashes2 = get_file_hashes(&conn, repo2.id.unwrap()).unwrap();
         assert!(hashes2.is_empty());
     }

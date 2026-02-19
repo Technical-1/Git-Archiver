@@ -610,7 +610,10 @@ mod tests {
         let repos = vec![("owner", "repo\"}){evil}")];
         let result = client.batch_get_repo_info(&repos).await;
 
-        assert!(result.is_err(), "Repo names with special chars should be rejected");
+        assert!(
+            result.is_err(),
+            "Repo names with special chars should be rejected"
+        );
         let err_msg = format!("{}", result.unwrap_err());
         assert!(
             err_msg.contains("Invalid GitHub repository name"),

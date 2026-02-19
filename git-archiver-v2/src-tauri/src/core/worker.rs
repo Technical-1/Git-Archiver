@@ -179,7 +179,10 @@ async fn handle_clone_inner(
             repo_url: repo.url.clone(),
             stage: TaskStage::Archiving,
             progress: Some(0.5),
-            message: Some(format!("Creating archive for {}/{}...", repo.owner, repo.name)),
+            message: Some(format!(
+                "Creating archive for {}/{}...",
+                repo.owner, repo.name
+            )),
         },
     );
 
@@ -191,11 +194,10 @@ async fn handle_clone_inner(
 
     let src_dir = clone_path.clone();
     let arch_path = archive_path.clone();
-    let archive_info = tokio::task::spawn_blocking(move || {
-        archive::create_archive(&src_dir, &arch_path, None)
-    })
-    .await
-    .map_err(|e| AppError::Custom(format!("Archive task panicked: {}", e)))??;
+    let archive_info =
+        tokio::task::spawn_blocking(move || archive::create_archive(&src_dir, &arch_path, None))
+            .await
+            .map_err(|e| AppError::Custom(format!("Archive task panicked: {}", e)))??;
 
     // Compute file hashes for future incremental detection
     let hash_dir = clone_path.clone();
@@ -317,17 +319,19 @@ async fn handle_update_inner(
             repo_url: repo.url.clone(),
             stage: TaskStage::Pulling,
             progress: Some(0.0),
-            message: Some(format!("Checking for updates to {}/{}...", repo.owner, repo.name)),
+            message: Some(format!(
+                "Checking for updates to {}/{}...",
+                repo.owner, repo.name
+            )),
         },
     );
 
     // Fetch and check for updates
     let check_path = repo_path.clone();
-    let has_updates = tokio::task::spawn_blocking(move || {
-        git::fetch_and_check_updates(&check_path)
-    })
-    .await
-    .map_err(|e| AppError::Custom(format!("Fetch check panicked: {}", e)))??;
+    let has_updates =
+        tokio::task::spawn_blocking(move || git::fetch_and_check_updates(&check_path))
+            .await
+            .map_err(|e| AppError::Custom(format!("Fetch check panicked: {}", e)))??;
 
     if !has_updates {
         // Update last_checked timestamp
@@ -341,7 +345,10 @@ async fn handle_update_inner(
                 repo_url: repo.url.clone(),
                 stage: TaskStage::Pulling,
                 progress: Some(1.0),
-                message: Some(format!("{}/{} is already up to date.", repo.owner, repo.name)),
+                message: Some(format!(
+                    "{}/{} is already up to date.",
+                    repo.owner, repo.name
+                )),
             },
         );
         return Ok(());
@@ -367,7 +374,10 @@ async fn handle_update_inner(
             repo_url: repo.url.clone(),
             stage: TaskStage::Archiving,
             progress: Some(0.5),
-            message: Some(format!("Creating archive for {}/{}...", repo.owner, repo.name)),
+            message: Some(format!(
+                "Creating archive for {}/{}...",
+                repo.owner, repo.name
+            )),
         },
     );
 
@@ -489,12 +499,7 @@ async fn handle_update_all(
         }
 
         if let Err(e) = task_manager.enqueue(Task::Update(id)).await {
-            log::warn!(
-                "Skipping update for {}/{}: {}",
-                repo.owner,
-                repo.name,
-                e
-            );
+            log::warn!("Skipping update for {}/{}: {}", repo.owner, repo.name, e);
         }
     }
 }

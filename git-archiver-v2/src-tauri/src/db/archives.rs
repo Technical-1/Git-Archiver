@@ -22,7 +22,11 @@ fn row_to_archive(row: &Row) -> Result<Archive, rusqlite::Error> {
     let created_at = match created_at_str.parse::<DateTime<Utc>>() {
         Ok(dt) => dt,
         Err(_) => {
-            log::warn!("Failed to parse created_at '{}' for archive id={}, falling back to Utc::now()", created_at_str, id);
+            log::warn!(
+                "Failed to parse created_at '{}' for archive id={}, falling back to Utc::now()",
+                created_at_str,
+                id
+            );
             Utc::now()
         }
     };
@@ -39,7 +43,8 @@ fn row_to_archive(row: &Row) -> Result<Archive, rusqlite::Error> {
     })
 }
 
-const SELECT_COLS: &str = "id, repo_id, file_path, size_bytes, file_count, is_incremental, created_at";
+const SELECT_COLS: &str =
+    "id, repo_id, file_path, size_bytes, file_count, is_incremental, created_at";
 
 /// Insert a new archive record.
 pub fn insert_archive(
@@ -104,7 +109,8 @@ mod tests {
     }
 
     fn insert_test_repo(conn: &Connection) -> i64 {
-        let repo = repos::insert_repo(conn, "octocat", "repo", "https://github.com/octocat/repo").unwrap();
+        let repo =
+            repos::insert_repo(conn, "octocat", "repo", "https://github.com/octocat/repo").unwrap();
         repo.id.unwrap()
     }
 
@@ -126,7 +132,10 @@ mod tests {
 
         assert!(archive.id.is_some());
         assert_eq!(archive.repo_id, repo_id);
-        assert_eq!(archive.file_path, "/data/repo/versions/repo-2024-01-01.tar.xz");
+        assert_eq!(
+            archive.file_path,
+            "/data/repo/versions/repo-2024-01-01.tar.xz"
+        );
         assert_eq!(archive.file_size, 1024);
         assert_eq!(archive.file_count, 42);
     }
@@ -135,13 +144,41 @@ mod tests {
     fn test_list_archives_for_repo() {
         let conn = setup_db();
         let repo_id1 = insert_test_repo(&conn);
-        let repo2 = repos::insert_repo(&conn, "other", "repo2", "https://github.com/other/repo2").unwrap();
+        let repo2 =
+            repos::insert_repo(&conn, "other", "repo2", "https://github.com/other/repo2").unwrap();
         let repo_id2 = repo2.id.unwrap();
 
         // Insert archives for both repos
-        insert_archive(&conn, repo_id1, "a1.tar.xz", "/path/a1.tar.xz", 100, 10, false).unwrap();
-        insert_archive(&conn, repo_id1, "a2.tar.xz", "/path/a2.tar.xz", 200, 20, true).unwrap();
-        insert_archive(&conn, repo_id2, "b1.tar.xz", "/path/b1.tar.xz", 300, 30, false).unwrap();
+        insert_archive(
+            &conn,
+            repo_id1,
+            "a1.tar.xz",
+            "/path/a1.tar.xz",
+            100,
+            10,
+            false,
+        )
+        .unwrap();
+        insert_archive(
+            &conn,
+            repo_id1,
+            "a2.tar.xz",
+            "/path/a2.tar.xz",
+            200,
+            20,
+            true,
+        )
+        .unwrap();
+        insert_archive(
+            &conn,
+            repo_id2,
+            "b1.tar.xz",
+            "/path/b1.tar.xz",
+            300,
+            30,
+            false,
+        )
+        .unwrap();
 
         // Only repo1's archives
         let archives = list_archives(&conn, repo_id1).unwrap();
@@ -158,7 +195,8 @@ mod tests {
         let conn = setup_db();
         let repo_id = insert_test_repo(&conn);
 
-        let archive = insert_archive(&conn, repo_id, "a.tar.xz", "/path/a.tar.xz", 100, 10, false).unwrap();
+        let archive =
+            insert_archive(&conn, repo_id, "a.tar.xz", "/path/a.tar.xz", 100, 10, false).unwrap();
         let archive_id = archive.id.unwrap();
 
         delete_archive(&conn, archive_id).unwrap();
@@ -171,7 +209,8 @@ mod tests {
         let conn = setup_db();
         let repo_id = insert_test_repo(&conn);
 
-        let archive = insert_archive(&conn, repo_id, "a.tar.xz", "/path/a.tar.xz", 100, 10, false).unwrap();
+        let archive =
+            insert_archive(&conn, repo_id, "a.tar.xz", "/path/a.tar.xz", 100, 10, false).unwrap();
         let archive_id = archive.id.unwrap();
 
         // Delete the repo -- should cascade to archives

@@ -2,6 +2,7 @@ import type { ColumnDef } from "@tanstack/react-table";
 import { ArrowUpDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "./status-badge";
+import { ProgressIndicator } from "./progress-indicator";
 import { RowActions } from "./row-actions";
 import { formatRelativeTime } from "@/lib/utils";
 import type { Repository } from "@/lib/types";
@@ -60,7 +61,12 @@ export const columns: ColumnDef<Repository>[] = [
         <ArrowUpDown className="ml-2 h-4 w-4" />
       </Button>
     ),
-    cell: ({ row }) => <StatusBadge status={row.original.status} />,
+    cell: ({ row }) => (
+      <div className="space-y-1">
+        <StatusBadge status={row.original.status} />
+        <ProgressIndicator repoUrl={row.original.url} />
+      </div>
+    ),
   },
   {
     accessorKey: "last_checked",

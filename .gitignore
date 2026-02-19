@@ -70,3 +70,8 @@ instance/
 # Environment variables
 .env
 .env.local
+
+# Tauri
+git-archiver-v2/src-tauri/target/
+git-archiver-v2/src-tauri/tauri-signing-key
+git-archiver-v2/node_modules/

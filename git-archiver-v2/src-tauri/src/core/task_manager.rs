@@ -73,17 +73,19 @@ impl TaskManager {
             Task::Clone(id) | Task::Update(id) => {
                 let repo_id = *id;
 
-                // Deduplication check: reject if already active.
-                if self.active_tasks.contains_key(&repo_id) {
-                    return Err(AppError::UserVisible(format!(
-                        "A task for repository {} is already in progress.",
-                        repo_id
-                    )));
+                // Atomic deduplication check + insert using DashMap's entry API.
+                // This avoids a TOCTOU race between contains_key and insert.
+                match self.active_tasks.entry(repo_id) {
+                    dashmap::mapref::entry::Entry::Occupied(_) => {
+                        return Err(AppError::UserVisible(format!(
+                            "A task for repository {} is already in progress.",
+                            repo_id
+                        )));
+                    }
+                    dashmap::mapref::entry::Entry::Vacant(vacant) => {
+                        vacant.insert(CancellationToken::new());
+                    }
                 }
-
-                // Register the task with a new cancellation token.
-                let token = CancellationToken::new();
-                self.active_tasks.insert(repo_id, token);
 
                 // Send through the channel.
                 self.tx.send(task).await.map_err(|_| {

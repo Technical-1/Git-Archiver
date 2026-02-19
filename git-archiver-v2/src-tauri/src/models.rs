@@ -49,6 +49,7 @@ pub struct Archive {
     pub file_path: String,
     pub file_size: u64,
     pub file_count: u32,
+    pub is_incremental: bool,
     pub commit_hash: Option<String>,
     pub created_at: DateTime<Utc>,
 }
@@ -132,7 +133,7 @@ impl From<&Archive> for ArchiveView {
             filename,
             file_size: archive.file_size,
             file_count: archive.file_count,
-            is_incremental: false,
+            is_incremental: archive.is_incremental,
             created_at: archive.created_at,
         }
     }

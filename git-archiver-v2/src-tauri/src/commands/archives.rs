@@ -53,17 +53,22 @@ pub async fn delete_archive(
     archive_id: i64,
     state: State<'_, AppState>,
 ) -> Result<(), AppError> {
-    let db = state.db.lock().await;
-    let archive_record = db::archives::get_archive_by_id(&db, archive_id)?
-        .ok_or_else(|| AppError::UserVisible(format!("Archive with ID {} not found.", archive_id)))?;
+    // Look up the archive and drop the lock before filesystem I/O
+    let file_path = {
+        let db = state.db.lock().await;
+        let archive_record = db::archives::get_archive_by_id(&db, archive_id)?
+            .ok_or_else(|| AppError::UserVisible(format!("Archive with ID {} not found.", archive_id)))?;
+        archive_record.file_path.clone()
+    };
 
     // Delete file from disk (ignore error if file already missing)
-    let archive_path = Path::new(&archive_record.file_path);
+    let archive_path = Path::new(&file_path);
     if archive_path.exists() {
         archive::delete_archive_file(archive_path)?;
     }
 
-    // Delete record from DB
+    // Re-acquire lock for DB deletion
+    let db = state.db.lock().await;
     db::archives::delete_archive(&db, archive_id)?;
     Ok(())
 }

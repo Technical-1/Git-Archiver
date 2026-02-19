@@ -9,14 +9,15 @@ use crate::models::Archive;
 /// Map a rusqlite Row to an Archive struct.
 ///
 /// Expected column order:
-///   0: id, 1: repo_id, 2: file_path, 3: size_bytes, 4: file_count, 5: created_at
+///   0: id, 1: repo_id, 2: file_path, 3: size_bytes, 4: file_count, 5: is_incremental, 6: created_at
 fn row_to_archive(row: &Row) -> Result<Archive, rusqlite::Error> {
     let id: i64 = row.get(0)?;
     let repo_id: i64 = row.get(1)?;
     let file_path: String = row.get(2)?;
     let size_bytes: i64 = row.get(3)?;
     let file_count: i64 = row.get(4)?;
-    let created_at_str: String = row.get(5)?;
+    let is_incremental: bool = row.get(5)?;
+    let created_at_str: String = row.get(6)?;
 
     let created_at = match created_at_str.parse::<DateTime<Utc>>() {
         Ok(dt) => dt,
@@ -32,12 +33,13 @@ fn row_to_archive(row: &Row) -> Result<Archive, rusqlite::Error> {
         file_path,
         file_size: u64::try_from(size_bytes).unwrap_or(0),
         file_count: u32::try_from(file_count).unwrap_or(0),
+        is_incremental,
         commit_hash: None,
         created_at,
     })
 }
 
-const SELECT_COLS: &str = "id, repo_id, file_path, size_bytes, file_count, created_at";
+const SELECT_COLS: &str = "id, repo_id, file_path, size_bytes, file_count, is_incremental, created_at";
 
 /// Insert a new archive record.
 pub fn insert_archive(

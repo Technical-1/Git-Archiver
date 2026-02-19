@@ -189,7 +189,7 @@ pub fn update_repo_timestamps(
     let checked_str = checked.map(|d| d.to_rfc3339());
 
     conn.execute(
-        "UPDATE repositories SET last_cloned = ?1, last_updated = ?2, last_checked = ?3 WHERE id = ?4",
+        "UPDATE repositories SET last_cloned = COALESCE(?1, last_cloned), last_updated = COALESCE(?2, last_updated), last_checked = COALESCE(?3, last_checked) WHERE id = ?4",
         params![cloned_str, updated_str, checked_str, id],
     )?;
     Ok(())

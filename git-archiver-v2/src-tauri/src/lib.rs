@@ -85,7 +85,7 @@ pub fn run() {
 
             // --- Spawn the worker loop ---
             let app_handle = app.handle().clone();
-            tokio::spawn(worker_loop(
+            tauri::async_runtime::spawn(worker_loop(
                 rx,
                 app_handle,
                 db,

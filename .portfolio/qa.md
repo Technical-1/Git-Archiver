@@ -1,132 +1,67 @@
-# Git-Archiver Q&A
+# Project Q&A Knowledge Base
 
-## Project Overview
+## Overview
 
-Git-Archiver is a PyQt5 desktop application I built to solve a personal need: preserving GitHub repositories before they disappear. It clones repositories, tracks their status via the GitHub API, and creates versioned compressed archives whenever updates are detected. The application supports both an interactive GUI for manual management and a headless CLI mode for automated scheduled updates.
-
-### Problem Solved
-
-Open source projects on GitHub can be deleted, made private, or archived without warning. I wanted a way to maintain local copies of repositories I depend on or find valuable, with automatic updates and compressed snapshots for historical reference.
-
-### Target Users
-
-- Developers who want to preserve copies of dependencies or interesting projects
-- Researchers archiving open source codebases for study
-- Organizations maintaining mirrors of critical external repositories
-- Anyone concerned about link rot and project disappearance
+Git Archiver is a cross-platform desktop application I built to preserve GitHub repositories before they disappear. It clones repositories, tracks their status via the GitHub API, and creates versioned compressed archives whenever updates are detected. The v2.0.0 release is a complete rewrite from Python/PyQt5 to Rust/Tauri/React, delivering native performance, cross-platform binaries, and a modern UI.
 
 ## Key Features
 
-### Repository Management
-Add repositories individually via URL input or bulk import from text files. The table view displays all tracked repositories with their status, description, and timestamps. Real-time search and status filtering help navigate large collections.
-
-### Automatic Updates
-An hourly timer checks if 24 hours have passed since the last update. When triggered, all active repositories are pulled for changes. This runs in the background without blocking the UI.
-
-### Versioned Archives
-Each time a repository is updated with new commits, a timestamped `.tar.xz` archive is created. Archives use XZ compression for optimal size reduction.
-
-### Incremental Archives
-I implemented MD5-based file change detection. Only files that have changed since the last archive are included in subsequent archives. This achieves 70-90% space savings compared to full archives.
-
-### Status Detection
-The GitHub API is queried to detect if repositories have been archived or deleted. Status is color-coded in the UI: green for active, yellow for archived, red for deleted, blue for pending.
-
-### Dual Interface
-The same core logic powers both a PyQt5 desktop GUI and a headless CLI mode. The CLI supports flags like `--headless`, `--update-all`, `--import-file`, and `--include-archived` for automation via cron jobs.
-
-### Context Menu Actions
-Right-clicking any repository row provides quick actions: copy URL, open on GitHub, update immediately, remove from tracking, or delete local copy.
-
-### GitHub Token Support
-Configure a personal access token via the Settings dialog to increase API rate limits from 60 to 5,000 requests per hour.
+- **Concurrent Task Engine**: Semaphore-controlled worker pool with per-task cancellation, deduplication, and configurable concurrency (1-10 parallel operations)
+- **Incremental Archives**: MD5-based file change detection creates archives containing only modified files, achieving 70-90% space savings
+- **Batch Status Detection**: GraphQL queries check up to 100 repositories per API call, detecting archived/deleted repos efficiently
+- **OS Keychain Integration**: GitHub tokens stored securely in macOS Keychain, Windows Credential Manager, or Linux Secret Service
+- **Legacy Migration**: One-click import from the v1.x Python JSON database with automatic archive scanning
+- **Auto-Updater**: Built-in update mechanism checks GitHub Releases for new versions with Ed25519 signature verification
 
 ## Technical Highlights
 
-### Challenge: Keeping UI Responsive During Long Operations
-Git clone and pull operations can take minutes for large repositories. I solved this by running all I/O operations in QThread workers that communicate with the main thread via Qt signals. The UI remains fully interactive while operations run in the background.
+### Complete Rewrite: Python to Rust
+The original application was a PyQt5 desktop app with a JSON file database. I rewrote the entire application in Rust with a Tauri v2 shell and React frontend. The Rust backend handles all business logic — git operations via libgit2, GitHub API calls, archive creation, and SQLite persistence. The React frontend uses shadcn/ui components with Zustand for state management. This produced ~5-7MB cross-platform binaries compared to Python's ~150MB+ when packaged.
 
-### Challenge: JSON Corruption from Crashes
-During development, power outages and crashes occasionally corrupted the JSON database. I implemented atomic writes (write to temp file, then rename) and a recovery function that uses regex to extract valid repository entries from corrupted files. This has saved data multiple times.
+### Async Task Queue Architecture
+I designed a channel-based task queue where frontend actions enqueue tasks through Tauri IPC commands, and a long-running worker loop consumes them with semaphore-controlled concurrency. Each task gets a cancellation token for graceful stop-all support. The deduplication system prevents duplicate clone/update operations from being enqueued for the same repository. The worker emits Tauri events that the frontend listens to for real-time progress updates in the activity log.
 
-### Challenge: GitHub API Rate Limits
-With 400+ tracked repositories, hitting rate limits was inevitable. I implemented:
-- GraphQL batch queries to check up to 100 repos in one request
-- A 5-minute TTL cache to avoid redundant API calls
-- Automatic backoff when rate limits are approached
-- Token authentication for 83x higher limits (5000 vs 60/hr)
+### Cross-Compilation Challenges
+Building for 4 platforms (macOS ARM64, macOS x86_64, Windows, Linux) revealed interesting dependency issues. The `openssl-sys` crate couldn't cross-compile from ARM64 to x86_64 on macOS CI runners. I solved this by switching `reqwest` to `rustls-tls` (pure Rust TLS) and enabling `vendored-openssl` for `git2`'s libgit2 dependency. These changes eliminated all system OpenSSL dependencies.
 
-### Innovative Approach: Incremental Archives
-Rather than storing full archives on every update (wasteful for repos that change frequently), I store MD5 hashes of all files in metadata JSON files alongside each archive. On subsequent archives, only changed files are included. For actively developed projects, this reduces archive storage by 70-90%.
+### Security-Conscious Design
+Several security measures are built into the codebase: GitHub tokens use OS keychain storage instead of plaintext files. URL validation rejects percent-encoded path traversal attempts. The GraphQL API client sanitizes repository owner/name inputs against injection. Archive extraction validates paths to prevent tar-slip attacks. All of these have dedicated test coverage.
 
-### Innovative Approach: Smart Update Checks
-Before pulling, I run `git fetch` followed by `git rev-list --count HEAD..@{upstream}` to check if updates actually exist. This avoids unnecessary network traffic and processing for unchanged repositories.
+## Development Story
+
+- **Timeline**: The v1.x Python version was built incrementally over several months. The v2.0.0 Rust/Tauri rewrite was planned as 12 milestones with 37 tasks and executed systematically.
+- **Hardest Part**: Getting the async task queue right — coordinating Tauri's async runtime, tokio channels, semaphore permits, and cancellation tokens while keeping the frontend responsive via event streaming.
+- **Lessons Learned**: Vendoring native dependencies (OpenSSL, SQLite, libgit2) is essential for cross-platform CI builds. Also, rustls is almost always preferable to native TLS for cross-compilation.
+- **Future Plans**: Apple code signing and notarization for macOS distribution, GitLab/Bitbucket support, archive deduplication with content-addressable storage.
 
 ## Frequently Asked Questions
 
-### Q1: Why did you build this instead of using an existing tool?
+### How does the concurrent task system work?
+Tasks (clone, update, refresh) are enqueued into an MPSC channel via Tauri IPC commands. A background worker loop receives tasks and acquires a tokio semaphore permit before executing each one. The semaphore limits concurrency to a configurable maximum (1-10). Each task gets a `CancellationToken` that can be triggered for graceful stop-all. The deduplication layer prevents the same repository from being cloned/updated multiple times simultaneously.
 
-Existing solutions like `git-mirror` or GitHub's own archive feature didn't meet my specific needs. I wanted: (1) incremental archives to save space, (2) status tracking for archived/deleted repos, (3) a GUI for manual management, and (4) headless mode for automation. Building a custom solution let me optimize for my exact workflow.
+### Why did you rewrite from Python to Rust?
+Three main reasons: (1) Distribution — Python desktop apps require bundling the interpreter (~150MB+), while Tauri produces ~5-7MB native binaries. (2) Performance — Rust's async runtime with libgit2 is significantly faster than Python subprocess calls to git CLI. (3) Features — Tauri v2 provides built-in auto-updater, OS keychain access, and proper cross-platform packaging that would require many third-party libraries in Python.
 
-### Q2: How much disk space does this use?
+### How does the incremental archive feature work?
+When creating an archive, the system computes MD5 hashes of all files in the repository and stores them in the SQLite database. On subsequent archives, it compares current hashes against stored ones and only includes files whose hashes have changed. For actively developed projects with frequent small changes, this reduces archive storage by 70-90%.
 
-It depends on the repositories you track. The application itself is tiny (~200KB of Python code). Repository clones use disk space proportional to their content (not history, since I use shallow clones). Archives vary but XZ compression typically achieves 3-5x reduction. With incremental archives, subsequent versions are often 70-90% smaller than full archives.
+### Why SQLite instead of the original JSON database?
+The v1.x JSON database required manual locking, atomic write patterns, and recovery scripts for corrupted files. SQLite provides ACID transactions, proper schema migrations, foreign key cascade deletes, and concurrent-safe access out of the box. The migration from JSON to SQLite is handled by a dedicated command in the app.
 
-### Q3: Can this archive private repositories?
+### How does the GitHub API integration handle rate limits?
+The app uses GraphQL batch queries to check up to 100 repositories in a single API call (vs one per REST call). The status bar displays current rate limit usage. With a personal access token (stored in OS keychain), the limit is 5,000 requests/hour vs 60/hour unauthenticated.
 
-Yes, if you configure a GitHub personal access token with appropriate permissions. The token is stored locally in `settings.json` (which is gitignored for security). Without a token, only public repositories can be accessed.
+### What was the most challenging part of the rewrite?
+Getting cross-platform CI builds working. The `macos-latest` GitHub Actions runner is ARM64, but building the x86_64 macOS target requires cross-compilation. Dependencies like `openssl-sys` and `libgit2-sys` don't cross-compile cleanly, so I had to switch to pure-Rust TLS (rustls) and vendor OpenSSL for libgit2.
 
-### Q4: What happens if a repository is deleted from GitHub?
+### How does the auto-updater work?
+Tauri's updater plugin checks GitHub Releases for new versions. Release artifacts are signed with Ed25519 minisign keys — the public key is embedded in the app, and the private key is a GitHub Actions secret. When an update is found, the app downloads and verifies the signature before installing.
 
-The application detects this via the GitHub API (404 response) and marks the repository status as "deleted" in red. Your local clone and archives are preserved. You can still access the content locally even though the GitHub original is gone.
+### Can I migrate from the old Python version?
+Yes. The Settings dialog includes a migration tool that reads the v1.x `cloned_repos.json` file, parses all repository entries with their metadata, and imports them into the SQLite database. It also scans the data directory for existing archives and creates records for them.
 
-### Q5: How do I automate updates?
+### What platforms are supported?
+macOS (Apple Silicon and Intel), Windows (64-bit), and Linux (x86_64). Pre-built binaries are available as `.dmg`, `.exe`/`.msi`, `.deb`, `.rpm`, and `.AppImage` on the GitHub Releases page.
 
-Use headless CLI mode with cron:
-```bash
-# Update all repos daily at 2 AM
-0 2 * * * cd ~/Git-Archiver && python run.py --headless --update-all
-
-# Process only pending repos hourly
-0 * * * * cd ~/Git-Archiver && python run.py --headless
-```
-
-### Q6: Why PyQt5 instead of a web interface?
-
-This application deals with large file operations (Git clones, archive creation) that are inherently local. A desktop app provides: direct file system access, no server deployment overhead, works offline once repos are cloned, and simpler security (no network exposure).
-
-### Q7: How does the incremental archive feature work?
-
-Each archive has a companion `.json` metadata file containing MD5 hashes of all archived files. When creating a new archive:
-1. Compute current MD5 hashes for all files
-2. Compare against the previous archive's metadata
-3. Only include files whose hashes have changed
-4. Save new metadata with current hashes
-
-This means a 100MB repository that changes 5 files might produce a 500KB incremental archive instead of another 100MB.
-
-### Q8: What if the JSON database gets corrupted?
-
-I implemented a recovery function that:
-1. Creates a backup of the corrupted file
-2. Uses regex to extract valid repository entry patterns
-3. Rebuilds a clean JSON with recovered data
-4. Logs how many repositories were recovered
-
-Additionally, all writes use an atomic pattern (write to `.tmp`, then rename) to prevent partial writes from corrupting the file.
-
-### Q9: Why shallow clones instead of full history?
-
-Shallow clones (`--depth 1`) are 5-10x faster and use significantly less disk space. For archiving purposes, I primarily care about the current state of the code, not the full commit history. If historical commits are needed, the original GitHub repo (if still available) or a full clone could be created separately.
-
-### Q10: Why did you refactor from a monolithic to modular architecture?
-
-The original v1.x codebase was a single 2,064-line GUI file that mixed UI, business logic, and data access. As features grew, it became difficult to test and maintain. In v2.0.0, I split the codebase into focused modules: `repo_manager.py` for business logic, `data_store.py` for persistence, `github_api.py` for API calls, and a `gui/` package with separated window, workers, dialogs, and widgets. This made the code testable (5 test modules with 60+ tests) and easier to extend.
-
-### Q11: How do I contribute or report issues?
-
-The repository includes comprehensive documentation in `README.md` and `CLAUDE.md` (development notes). The codebase is organized into clear modules with docstrings. Key areas for contribution include:
-- Adding support for GitLab/Bitbucket
-- Implementing archive deduplication
-- Adding export/import for repository lists
-- Removing legacy monolithic files once migration is fully verified
+### What would you improve next?
+Apple code signing and notarization to eliminate macOS Gatekeeper warnings. Support for GitLab and Bitbucket repositories. Content-addressable archive storage to deduplicate identical files across different repository versions.

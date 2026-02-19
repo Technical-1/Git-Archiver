@@ -1,70 +1,61 @@
-# Git-Archiver Architecture
+# Git Archiver Architecture
 
 ## System Overview
 
 ```mermaid
 flowchart TB
-    subgraph User["User Interfaces"]
-        GUI["PyQt5 Desktop GUI"]
-        CLI["Headless CLI Mode"]
+    subgraph Frontend["React Frontend"]
+        App["App.tsx<br/>Layout & Routing"]
+        Stores["Zustand Stores<br/>State Management"]
+        Components["UI Components<br/>shadcn/ui + Custom"]
+        TauriAPI["Tauri IPC Bindings<br/>lib/commands.ts"]
     end
 
-    subgraph Core["Core Application Layer"]
-        Main["main.py<br/>Entry Point & Mode Router"]
-        RepoMgr["repo_manager.py<br/>Core Business Logic"]
-        DataStore["data_store.py<br/>JSON Persistence"]
-        GitHubAPI["github_api.py<br/>API Integration"]
-        Config["config.py<br/>Settings Management"]
-        Utils["utils.py<br/>Shared Utilities"]
+    subgraph Backend["Rust Backend (Tauri)"]
+        Commands["Command Handlers<br/>commands/*.rs"]
+        Core["Core Business Logic<br/>core/*.rs"]
+        DB["SQLite Data Layer<br/>db/*.rs"]
+        State["AppState<br/>DB + TaskManager + GitHubClient"]
     end
 
-    subgraph GUI_Layer["GUI Components"]
-        MainWindow["main_window.py<br/>Main Application Window"]
-        Workers["workers.py<br/>QThread Workers"]
-        Dialogs["dialogs.py<br/>Settings & Archive Dialogs"]
-        Widgets["widgets.py<br/>Enhanced Table Widget"]
+    subgraph Workers["Async Worker System"]
+        TaskMgr["TaskManager<br/>Semaphore Queue"]
+        WorkerLoop["Worker Loop<br/>Task Consumer"]
     end
 
-    subgraph External["External Dependencies"]
-        GitCLI["Git CLI<br/>Clone & Pull Operations"]
-        TarCLI["tar CLI<br/>Archive Compression"]
-        GitHubREST["GitHub REST API<br/>Repository Metadata"]
-        GitHubGraphQL["GitHub GraphQL API<br/>Batch Queries"]
+    subgraph External["External Services"]
+        GitHubREST["GitHub REST API<br/>Repo Metadata"]
+        GitHubGraphQL["GitHub GraphQL API<br/>Batch Status Checks"]
+        Keychain["OS Keychain<br/>Token Storage"]
     end
 
-    subgraph Storage["Data Storage"]
-        JSON["cloned_repos.json<br/>Repository Database"]
-        Settings["settings.json<br/>User Preferences"]
-        DataFolder["data/<repo>.git/<br/>Cloned Repositories"]
-        Versions["versions/*.tar.xz<br/>Archived Snapshots"]
+    subgraph Storage["Local Storage"]
+        SQLite["SQLite Database<br/>Repos, Archives, Settings"]
+        DataDir["data/<repo>.git/<br/>Cloned Repositories"]
+        Archives["versions/*.tar.xz<br/>Compressed Archives"]
     end
 
-    GUI --> Main
-    CLI --> Main
-    Main --> RepoMgr
-    Main --> DataStore
-    Main --> Config
+    App --> Stores
+    App --> Components
+    Stores --> TauriAPI
+    TauriAPI --> |"invoke()"| Commands
 
-    RepoMgr --> DataStore
-    RepoMgr --> GitHubAPI
-    RepoMgr --> Utils
-    RepoMgr --> GitCLI
-    RepoMgr --> TarCLI
+    Commands --> Core
+    Commands --> DB
+    Commands --> State
 
-    GitHubAPI --> GitHubREST
-    GitHubAPI --> GitHubGraphQL
-    GitHubAPI --> Config
+    Core --> DB
+    State --> TaskMgr
+    TaskMgr --> WorkerLoop
+    WorkerLoop --> Core
 
-    MainWindow --> Workers
-    MainWindow --> Dialogs
-    MainWindow --> Widgets
-    MainWindow --> RepoMgr
-    Workers --> RepoMgr
+    Core --> GitHubREST
+    Core --> GitHubGraphQL
+    Commands --> Keychain
 
-    DataStore --> JSON
-    Config --> Settings
-    RepoMgr --> DataFolder
-    RepoMgr --> Versions
+    DB --> SQLite
+    Core --> DataDir
+    Core --> Archives
 ```
 
 ## Data Flow Architecture
@@ -74,161 +65,152 @@ flowchart LR
     subgraph Input["Input Sources"]
         URL["Single URL"]
         BulkFile["Text File<br/>(Bulk Import)"]
+        LegacyJSON["v1.x JSON<br/>(Migration)"]
     end
 
-    subgraph Processing["Processing Pipeline"]
-        Validate["URL Validation"]
-        APICheck["GitHub API<br/>Status Check"]
-        Clone["Git Clone<br/>(Shallow)"]
-        Pull["Git Pull<br/>(Smart Check)"]
-        Archive["tar -cJf<br/>(Incremental)"]
+    subgraph Processing["Async Processing Pipeline"]
+        Validate["URL Validation<br/>& Normalization"]
+        Enqueue["Task Enqueue<br/>(Deduplication)"]
+        Worker["Worker Loop<br/>(Semaphore-limited)"]
+        Clone["libgit2 Clone<br/>(Bare Repo)"]
+        Fetch["libgit2 Fetch<br/>(Check Updates)"]
+        Archive["tar.xz Creation<br/>(Incremental MD5)"]
     end
 
-    subgraph Output["Output Storage"]
-        JSONDb["cloned_repos.json"]
+    subgraph Output["Storage"]
+        SQLiteDB["SQLite<br/>Repos + Archives"]
         RepoDir["data/<repo>.git/"]
         ArchiveDir["versions/*.tar.xz"]
-        Metadata["versions/*.json"]
+    end
+
+    subgraph Events["Frontend Events"]
+        Emit["Tauri Events<br/>task-progress<br/>task-complete"]
     end
 
     URL --> Validate
     BulkFile --> Validate
-    Validate --> APICheck
-    APICheck --> |"New Repo"| Clone
-    APICheck --> |"Existing Repo"| Pull
+    LegacyJSON --> Validate
+    Validate --> Enqueue
+    Enqueue --> Worker
+    Worker --> |"New Repo"| Clone
+    Worker --> |"Existing Repo"| Fetch
     Clone --> Archive
-    Pull --> |"Has Updates"| Archive
+    Fetch --> |"Has Updates"| Archive
 
-    APICheck --> JSONDb
+    Clone --> SQLiteDB
+    Fetch --> SQLiteDB
+    Archive --> SQLiteDB
     Clone --> RepoDir
-    Pull --> RepoDir
+    Fetch --> RepoDir
     Archive --> ArchiveDir
-    Archive --> Metadata
+
+    Worker --> Emit
 ```
 
 ## Component Responsibilities
 
-### Entry Points
-- **`run.py`**: Convenience launcher script that imports and calls main()
-- **`main.py`**: Parses command-line arguments, routes between GUI and CLI modes
+### Rust Backend
 
-### Core Modules
-- **`repo_manager.py`**: The heart of the application. I placed all repository operations here including cloning, pulling, archiving, and status detection. It contains thread-safe JSON operations and API caching to ensure data integrity during concurrent operations.
-- **`data_store.py`**: I designed this module to manage JSON persistence with robust error recovery. It can rebuild corrupted JSON files by extracting valid entries using regex parsing.
-- **`github_api.py`**: Handles GitHub API interactions with rate limiting, retries, and token authentication. I implemented automatic backoff when approaching rate limits.
-- **`config.py`**: Centralized configuration management including file paths, default settings, and token storage.
+#### Command Handlers (`commands/`)
+- **`repos.rs`**: Add, list, delete repositories. Bulk import from text files with URL validation.
+- **`tasks.rs`**: Enqueue clone/update tasks via TaskManager. Update-all triggers batch processing. Stop-all cancels in-flight tasks.
+- **`archives.rs`**: List archives for a repository, extract archives to a target directory, delete individual archives.
+- **`settings.rs`**: Load/save app settings (data directory, concurrency). Manage GitHub token via OS keychain. Check API rate limits.
+- **`migrate.rs`**: Parse v1.x `cloned_repos.json` format, import repositories, scan for existing archives on disk.
 
-### GUI Layer
-- **`main_window.py`**: Main application window with table view, search/filter, and queue management
-- **`workers.py`**: QThread-based workers that run clone/update operations without blocking the UI
-- **`dialogs.py`**: Modal dialogs for settings configuration and archive browsing
-- **`widgets.py`**: Enhanced table widget with custom styling
+#### Core Business Logic (`core/`)
+- **`git.rs`**: Clone and fetch operations using libgit2. Bare repository support with credential callbacks for authenticated access.
+- **`github_api.rs`**: REST API for individual repo info. GraphQL batch queries for up to 100 repos per request. Rate limit checking. Input sanitization against GraphQL injection.
+- **`archive.rs`**: Create/extract `.tar.xz` archives. Incremental archives using file hash comparison. Tar-slip path traversal protection on extraction.
+- **`hasher.rs`**: MD5 directory hashing for incremental archive detection. Excludes `.git/` directories.
+- **`task_manager.rs`**: MPSC channel-based task queue with tokio semaphore for concurrency control. Per-task cancellation tokens. Deduplication prevents duplicate clone/update operations.
+- **`worker.rs`**: Long-running async loop that consumes tasks from the channel. Acquires semaphore permits, executes operations, emits Tauri events for frontend progress updates.
+- **`url.rs`**: GitHub URL validation, normalization (lowercase, strip trailing slash/`.git`), and owner/repo extraction. Rejects percent-encoded path traversal attempts.
+
+#### Database Layer (`db/`)
+- **`migrations.rs`**: Schema versioning with incremental migrations. Creates repos, archives, file_hashes, and settings tables.
+- **`repos.rs`**: CRUD operations for repositories with status filtering and metadata updates.
+- **`archives.rs`**: Archive record management with cascade delete when repos are removed.
+- **`file_hashes.rs`**: Per-repo file hash storage for incremental archive diffing.
+- **`settings.rs`**: Key-value settings with allowlist validation.
+
+### React Frontend
+
+#### State Management (`stores/`)
+- **Zustand stores**: Centralized state for repositories, archives, settings, and UI preferences. Async actions call Tauri IPC commands.
+
+#### Key Components
+- **`repo-table/`**: TanStack Table-based repository list with column sorting, status filtering, row selection, and context menu actions.
+- **`add-repo-bar.tsx`**: URL input with single-add and bulk import (file picker) support.
+- **`activity-log.tsx`**: Scrollable log that listens to Tauri events for real-time operation feedback.
+- **`status-bar.tsx`**: Displays active task count and GitHub API rate limit status.
+- **`dialogs/`**: Settings dialog (data directory, concurrency, GitHub token), archive viewer, and migration wizard.
 
 ## Key Architecture Decisions
 
-### 1. Shallow Clones for Initial Download
-I chose to use `git clone --depth 1` for initial repository downloads. This provides 5-10x faster clone times compared to full history clones. Since the primary goal is archiving current state (not historical analysis), shallow clones make sense. The trade-off is that the local copy lacks full git history, but for archiving purposes this is acceptable.
+### 1. Rust/Tauri Rewrite (v2.0.0)
+The original Python/PyQt5 application was rewritten in Rust with a Tauri v2 shell and React frontend. This provides native performance, cross-platform binaries (~5-7MB), built-in auto-updater, and OS keychain integration. The trade-off was increased development complexity, but the result is a significantly more robust and distributable application.
 
-### 2. Incremental Archives with MD5 Hashing
-Rather than creating full archives on every update, I implemented an incremental archive system. Each archive stores MD5 hashes of all files in a companion `.json` metadata file. On subsequent updates, only files with changed hashes are included. This achieves 70-90% space savings for repositories with frequent small updates.
+### 2. SQLite over JSON
+The v1.x app used a JSON file as its database, which was prone to corruption and required manual recovery tools. SQLite provides ACID transactions, proper schema migrations, cascade deletes, and concurrent-safe access without any of those issues.
 
-### 3. GraphQL Batching for Status Checks
-The GitHub REST API limits you to one repository per request. I implemented GraphQL batch queries that can check up to 100 repositories in a single API call. This dramatically reduces API usage when refreshing status for a large collection of tracked repositories.
+### 3. libgit2 over Git CLI
+Using `git2` (Rust bindings for libgit2) instead of shelling out to `git` CLI eliminates the external dependency, provides better error handling, and enables credential callbacks for token-based authentication without environment variable manipulation.
 
-### 4. Atomic JSON Writes with Recovery
-JSON file corruption was a real risk during development (power loss, crashes). I implemented atomic writes (write to temp file, then rename) and a recovery system that can extract valid repository entries from corrupted JSON using regex parsing. This approach has saved data multiple times during development.
+### 4. Async Task Queue with Semaphore
+Rather than spawning unbounded threads, the worker system uses a tokio semaphore to limit concurrent operations (configurable 1-10). Tasks flow through an MPSC channel with deduplication, and each task gets a cancellation token for graceful stop-all support.
 
-### 5. QThread Workers for UI Responsiveness
-Long-running operations (clone, pull, archive) run in QThread workers to keep the GUI responsive. Workers communicate with the main thread via Qt signals, allowing safe UI updates without blocking. I chose QThread over Python's threading module for better Qt integration.
+### 5. Incremental Archives with MD5 Hashing
+Carried over from v1.x — each archive stores MD5 hashes of all files in the database. Subsequent archives only include changed files, achieving 70-90% space savings for frequently updated repositories.
 
-### 6. Dual-Mode Architecture (GUI + CLI)
-I designed the application to support both interactive GUI usage and headless CLI mode for automation. The CLI mode is ideal for cron jobs or scheduled tasks that update repositories automatically without human interaction. Both modes share the same core logic.
+### 6. OS Keychain for Token Storage
+GitHub tokens are stored in the OS keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service) via the `keyring` crate, rather than in a plaintext config file. This is both more secure and follows platform conventions.
 
-### 7. 5-Minute API Cache
-To reduce redundant GitHub API calls, I implemented a 5-minute TTL cache. When checking multiple repositories in quick succession, cached results are reused. This is particularly valuable during bulk operations and helps stay under rate limits.
-
-## Threading Model
+## Concurrency Model
 
 ```mermaid
 flowchart TB
-    subgraph MainThread["Main Thread (GUI)"]
-        UI["Qt Event Loop"]
-        Signals["Signal Handlers"]
+    subgraph Frontend["React (Main Thread)"]
+        UI["UI Components"]
+        Events["Event Listeners"]
     end
 
-    subgraph WorkerPool["Worker Threads"]
-        CloneWorker["CloneWorker<br/>(Single Repo)"]
-        BulkWorker["BulkCloneWorker<br/>(Multiple Repos)"]
-        RefreshWorker["RefreshWorker<br/>(Status Check)"]
+    subgraph TauriRuntime["Tauri Async Runtime"]
+        Commands["IPC Command Handlers"]
+        WorkerTask["Worker Loop (tokio::spawn)"]
     end
 
-    subgraph BackgroundQueue["Background Queue"]
-        QueueProcessor["Queue Processor<br/>(ThreadPool)"]
+    subgraph TaskQueue["Task Queue"]
+        MPSC["MPSC Channel"]
+        Semaphore["Tokio Semaphore<br/>(max_concurrent)"]
+        Cancel["CancellationToken<br/>(per task)"]
     end
 
-    UI --> |"Start Operation"| CloneWorker
-    UI --> |"Update All"| BulkWorker
-    UI --> |"Refresh Status"| RefreshWorker
-    UI --> |"Add to Queue"| QueueProcessor
+    subgraph Operations["Concurrent Operations"]
+        Op1["Clone Repo A"]
+        Op2["Update Repo B"]
+        Op3["Update Repo C"]
+    end
 
-    CloneWorker --> |"finished_signal"| Signals
-    BulkWorker --> |"progress_signal"| Signals
-    RefreshWorker --> |"finished_signal"| Signals
-    QueueProcessor --> |"Timer Update"| Signals
+    UI --> |"invoke()"| Commands
+    Commands --> |"enqueue"| MPSC
+    WorkerTask --> |"recv()"| MPSC
+    WorkerTask --> |"acquire_permit()"| Semaphore
+    Semaphore --> Op1
+    Semaphore --> Op2
+    Semaphore --> Op3
+    Op1 --> |"task-complete"| Events
+    Op2 --> |"task-progress"| Events
+    Cancel --> |"cancel()"| Op1
+    Cancel --> |"cancel()"| Op2
+    Cancel --> |"cancel()"| Op3
 ```
 
-## File System Structure
+## Database Schema
 
 ```
-Git-Archiver/
-├── src/                          # Source code
-│   ├── __init__.py
-│   ├── __main__.py               # Module entry point
-│   ├── main.py                   # Application entry
-│   ├── cli.py                    # Headless mode
-│   ├── config.py                 # Configuration
-│   ├── utils.py                  # Utilities
-│   ├── data_store.py             # JSON persistence
-│   ├── github_api.py             # GitHub API
-│   ├── repo_manager.py           # Core logic (~1100 lines)
-│   └── gui/
-│       ├── __init__.py
-│       ├── main_window.py        # Main window (~720 lines)
-│       ├── workers.py            # Background threads
-│       ├── dialogs.py            # Modal dialogs
-│       └── widgets.py            # Custom widgets
-├── scripts/                      # Utility scripts
-│   ├── sync_repos.py             # JSON/disk synchronization
-│   ├── repair_json.py            # JSON recovery
-│   └── create_fresh_json.py      # Fresh database creation
-├── tests/
-│   ├── test_config.py            # Config and settings tests
-│   ├── test_data_store.py        # JSON persistence tests
-│   ├── test_github_api.py        # GitHub API tests
-│   ├── test_repo_manager.py      # Core operations tests
-│   └── test_utils.py             # Utility function tests
-├── data/                         # Repository storage
-│   └── <repo-name>.git/
-│       └── versions/
-│           ├── 20250114-120000.tar.xz
-│           └── 20250114-120000.json
-├── cloned_repos.json             # Repository database
-└── settings.json                 # User settings
+repos: id, url, owner, name, status, description, is_private, local_path, last_cloned, last_updated, created_at
+archives: id, repo_id (FK), file_path, file_size, file_count, archive_type, created_at
+file_hashes: id, repo_id (FK), file_path, hash, updated_at
+settings: key, value
 ```
-
-## Legacy Code
-
-The codebase was refactored from a monolithic architecture (v1.x) into the current modular structure (v2.0.0). Three legacy files remain in `src/` for reference but are not actively used:
-
-| File | Lines | Replaced By |
-|------|-------|-------------|
-| `github_repo_saver_gui.py` | 2,064 | `src/gui/` package |
-| `github_repo_saver_cli.py` | 351 | `src/cli.py` |
-| `github_repo_saver_web.py` | 619 | Not actively maintained |
-
-## Limitations
-
-- **No Git History**: Shallow clones mean I cannot access historical commits. If full history is needed, the archive would need to be modified.
-- **GitHub Only**: The current implementation is GitHub-specific. Supporting GitLab or Bitbucket would require API adapter pattern refactoring.
-- **Single Machine**: No distributed architecture - everything runs locally. For massive collections, a distributed approach would be needed.
-- **No Deduplication**: Archives may contain duplicate content across versions. A content-addressable storage system could reduce this.

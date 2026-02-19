@@ -1,174 +1,131 @@
-# Git-Archiver
+# Git Archiver
 
-A PyQt5 desktop application for cloning, tracking, and archiving GitHub repositories with version control and compression.
+A cross-platform desktop application for cloning, tracking, and archiving GitHub repositories with versioned compressed backups and incremental updates.
+
+Built with Rust and Tauri v2 for native performance, with a React + TypeScript frontend. Supports macOS (ARM64 & Intel), Windows, and Linux.
 
 ## Features
 
-- **Repository Management** - Add, update, delete, and track GitHub repositories
-- **Automatic Updates** - Hourly checks with 24-hour update intervals
+- **Repository Management** - Add, bulk import, update, and delete tracked GitHub repositories
+- **Concurrent Task Engine** - Semaphore-controlled worker pool processes clone/update tasks in parallel
 - **Versioned Archives** - Creates compressed `.tar.xz` archives for each update
-- **Incremental Archives** - Only archives changed files to save disk space (70-90% reduction)
-- **Status Detection** - Detects archived/deleted repositories via GitHub API
-- **Multiple Interfaces** - Desktop GUI and headless CLI for automation
-- **Search & Filter** - Real-time search and status filtering
-- **Context Menus** - Right-click actions (Copy URL, Open on GitHub, Update, Delete)
-- **GitHub Token Support** - Configurable token for higher API rate limits
+- **Incremental Archives** - Only archives changed files using MD5 hashing (70-90% space savings)
+- **Status Detection** - Detects archived/deleted repositories via GitHub API with batch GraphQL queries
+- **Activity Log** - Real-time streaming log of all operations
+- **Dark/Light Theme** - System-aware theme toggle with persistent preference
+- **Auto-Updater** - Built-in update mechanism via Tauri's updater plugin
+- **Legacy Migration** - Import repositories from the v1.x Python JSON database
+- **Secure Token Storage** - GitHub token stored in OS keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service)
 
-## Installation
+## Download
+
+Pre-built binaries for all platforms are available on the [Releases](https://github.com/Technical-1/Git-Archiver/releases) page:
+
+| Platform | Formats |
+|----------|---------|
+| macOS (Apple Silicon) | `.dmg`, `.app.tar.gz` |
+| macOS (Intel) | `.dmg`, `.app.tar.gz` |
+| Windows | `.exe` (NSIS), `.msi` |
+| Linux | `.deb`, `.rpm`, `.AppImage` |
+
+## Development
+
+### Prerequisites
+
+- [Rust](https://rustup.rs/) (stable)
+- [Node.js](https://nodejs.org/) 20+
+- [pnpm](https://pnpm.io/) 9+
+- System dependencies (Linux only): `libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf`
+
+### Setup
 
 ```bash
-# Clone the repository
-git clone https://github.com/Technical-1/Git-Archiver.git
-cd Git-Archiver
-
-# Create virtual environment (recommended)
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
+cd git-archiver-v2
+pnpm install
 ```
 
-## Usage
-
-### Desktop GUI
+### Run (Development)
 
 ```bash
-python run.py
+pnpm tauri dev
 ```
 
-Or run as a module:
+### Build (Production)
+
 ```bash
-python -m src
+pnpm tauri build
 ```
 
-### Headless CLI (for automation/cron)
+### Testing
 
 ```bash
-# Process only pending repositories
-python run.py --headless
+# Rust tests (105 tests)
+cargo test
 
-# Update all repositories
-python run.py --headless --update-all
-
-# Include archived/deleted repos in processing
-python run.py --headless --update-all --include-archived
-
-# Import URLs from file before processing
-python run.py --headless --import-file urls.txt
+# Frontend tests (130 tests)
+pnpm test
 ```
 
 ## Project Structure
 
 ```
-Git-Archiver/
-├── run.py                    # Convenience entry point
-├── requirements.txt          # Python dependencies
-├── src/
-│   ├── __init__.py           # Package init (v2.0.0)
-│   ├── __main__.py           # Module entry point
-│   ├── main.py               # Application entry point
-│   ├── cli.py                # Headless CLI mode
-│   ├── config.py             # Settings and constants
-│   ├── utils.py              # Utility functions
-│   ├── data_store.py         # JSON persistence with recovery
-│   ├── github_api.py         # GitHub API with rate limiting
-│   ├── repo_manager.py       # Core repository operations
-│   └── gui/
-│       ├── __init__.py
-│       ├── main_window.py    # Main GUI window
-│       ├── widgets.py        # Enhanced table widget
-│       ├── dialogs.py        # Settings and archive dialogs
-│       └── workers.py        # Background QThread workers
-├── scripts/
-│   ├── sync_repos.py         # Sync JSON with disk state
-│   ├── repair_json.py        # Recover corrupted JSON
-│   └── create_fresh_json.py  # Create new JSON database
-├── tests/
-│   ├── test_config.py        # Config and settings tests
-│   ├── test_data_store.py    # JSON persistence tests
-│   ├── test_github_api.py    # GitHub API tests
-│   ├── test_repo_manager.py  # Core operations tests
-│   └── test_utils.py         # Utility function tests
-├── data/                     # Cloned repositories (gitignored)
-│   └── <repo>.git/
-│       └── versions/         # Archived versions
-│           ├── <timestamp>.tar.xz
-│           └── <timestamp>.json  # Archive metadata
-├── cloned_repos.json         # Repository database (gitignored)
-├── settings.json             # User settings (gitignored)
-└── CLAUDE.md                 # Development documentation
+git-archiver-v2/
+├── src/                          # React frontend
+│   ├── components/               # UI components
+│   │   ├── repo-table/           # Repository table with sorting/filtering
+│   │   ├── dialogs/              # Settings, archives, migration dialogs
+│   │   ├── ui/                   # shadcn/ui primitives
+│   │   ├── add-repo-bar.tsx      # URL input with bulk import
+│   │   ├── activity-log.tsx      # Streaming operation log
+│   │   └── status-bar.tsx        # Task count and rate limit display
+│   ├── stores/                   # Zustand state management
+│   ├── hooks/                    # Custom React hooks
+│   └── lib/                      # Tauri command bindings
+├── src-tauri/                    # Rust backend
+│   └── src/
+│       ├── commands/             # Tauri IPC command handlers
+│       │   ├── repos.rs          # add, list, delete, import
+│       │   ├── tasks.rs          # clone, update, update_all, stop
+│       │   ├── archives.rs       # list, extract, delete
+│       │   ├── settings.rs       # get, save, rate_limit
+│       │   └── migrate.rs        # v1.x JSON migration
+│       ├── core/                 # Business logic
+│       │   ├── git.rs            # Clone/fetch via libgit2
+│       │   ├── github_api.rs     # REST + GraphQL API client
+│       │   ├── archive.rs        # tar.xz creation/extraction
+│       │   ├── hasher.rs         # MD5 incremental diff
+│       │   ├── task_manager.rs   # Concurrent task queue
+│       │   ├── worker.rs         # Background worker loop
+│       │   └── url.rs            # URL validation/normalization
+│       ├── db/                   # SQLite data layer
+│       │   ├── migrations.rs     # Schema migrations
+│       │   ├── repos.rs          # Repository CRUD
+│       │   ├── archives.rs       # Archive records
+│       │   ├── file_hashes.rs    # MD5 hash storage
+│       │   └── settings.rs       # App settings
+│       ├── models.rs             # Shared data types
+│       ├── error.rs              # Error types
+│       ├── state.rs              # App state (DB, TaskManager, GitHub client)
+│       └── lib.rs                # Tauri app setup
+└── src-tauri/tauri.conf.json     # Tauri configuration
 ```
+
+## Tech Stack
+
+- **Backend**: Rust, Tauri v2, SQLite (rusqlite), libgit2, tokio
+- **Frontend**: React 19, TypeScript, Tailwind CSS, shadcn/ui, Zustand
+- **Build**: Vite, Cargo
+- **Testing**: Rust unit tests (105), Vitest + Testing Library (130)
+- **CI/CD**: GitHub Actions (test + release workflows)
 
 ## How It Works
 
-1. **Add Repositories** - Provide GitHub repository URLs via GUI or text file
-2. **Clone** - Repositories are cloned as bare `.git` directories to `data/`
-3. **Track** - Repository metadata is stored in `cloned_repos.json`
-4. **Monitor** - GitHub API checks repository status (active/archived/deleted)
-5. **Archive** - When updates are detected, compressed archives are created
-6. **Version** - Archives are timestamped and stored in `versions/` subdirectory
-
-## Data Flow
-
-```
-URLs → cloned_repos.json → data/<repo>.git/ → versions/<timestamp>.tar.xz
-       (tracking DB)       (git clone)        (compressed archives)
-```
-
-## Repository Status Values
-
-| Status | Description |
-|--------|-------------|
-| `pending` | Not yet cloned |
-| `active` | Live repository on GitHub |
-| `archived` | Archived on GitHub (read-only) |
-| `deleted` | Not found (404) or private |
-| `error` | Clone/pull failed |
-
-## Configuration
-
-### GitHub Token (Optional but Recommended)
-
-Without a token: 60 API requests/hour
-With a token: 5,000 API requests/hour
-
-Configure via GUI Settings dialog or add to `settings.json`:
-```json
-{
-  "github_token": "ghp_your_token_here"
-}
-```
-
-## Utility Scripts
-
-```bash
-# Sync JSON database with actual disk data
-python scripts/sync_repos.py --add-missing
-
-# Recover data from corrupted JSON
-python scripts/repair_json.py
-
-# Create fresh JSON database
-python scripts/create_fresh_json.py
-```
-
-## Performance
-
-- **Shallow Clones** - Uses `--depth 1` for 5-10x faster initial clones
-- **Smart Updates** - Checks for changes before pulling
-- **Incremental Archives** - Only archives modified files
-- **Async Archives** - Background threads keep UI responsive
-- **API Caching** - 5-minute cache reduces redundant API calls
-
-## Requirements
-
-- Python 3.8+
-- PyQt5 >= 5.15.0
-- requests >= 2.25.0
-- Git (command line)
-- tar (with XZ compression support)
-- pytest >= 7.0.0 (for running tests)
+1. **Add Repositories** - Provide GitHub URLs via the input bar or bulk import from a text file
+2. **Clone** - Repositories are cloned via libgit2 as bare `.git` directories
+3. **Track** - Repository metadata is stored in SQLite with status, timestamps, and descriptions
+4. **Monitor** - GitHub API batch queries detect archived/deleted repositories
+5. **Archive** - When updates are detected, incremental `.tar.xz` archives are created
+6. **Version** - Archives are timestamped and tracked in the database
 
 ## License
 

@@ -1,169 +1,124 @@
-# Git-Archiver Technology Stack
+# Technology Stack
 
 ## Overview
 
-Git-Archiver (v2.0.0) is a desktop application built with Python and PyQt5 that provides both GUI and CLI interfaces for archiving GitHub repositories. The codebase was refactored from a monolithic architecture into a modular package structure with separated concerns.
+Git Archiver v2.0.0 is a complete rewrite from Python/PyQt5 to Rust/Tauri/React. The Rust backend handles all business logic, git operations, and data persistence, while the React frontend provides a modern, responsive UI. Tauri v2 bridges the two with a lightweight native shell and IPC layer.
 
-## Frontend
+## Core Technologies
 
-### PyQt5 (v5.15.0+)
-- **Role**: Desktop GUI framework
-- **Why I chose it**: PyQt5 provides native-looking widgets across platforms (macOS, Windows, Linux) with a mature, well-documented API. I considered alternatives like Tkinter (too basic), Electron (too heavy for a Python backend), and wxPython (less modern styling). PyQt5 struck the right balance between capability and development speed.
+| Category | Technology | Version | Purpose |
+|----------|------------|---------|---------|
+| Backend Language | Rust | 2021 edition | Core business logic, performance, safety |
+| App Framework | Tauri | v2 | Native shell, IPC, auto-updater, cross-platform builds |
+| Frontend Language | TypeScript | ~5.8 | Type-safe frontend development |
+| Frontend Framework | React | 19 | Component-based UI |
+| Database | SQLite | via rusqlite 0.31 | Local data persistence with ACID transactions |
+| Build Tool (Frontend) | Vite | 7 | Fast HMR dev server and production bundler |
+| Build Tool (Backend) | Cargo | stable | Rust package manager and build system |
 
-### Key GUI Components
-| Component | Purpose |
-|-----------|---------|
-| `QTableWidget` | Repository list with sortable columns |
-| `QThread` | Background workers for non-blocking operations |
-| `QTimer` | Scheduled auto-updates (hourly checks) |
-| `QMenu` | Context menus for row actions |
-| `QDialog` | Settings and archive viewer modals |
-| `QProgressBar` | Visual feedback during bulk operations |
+## Backend (Rust)
 
-## Backend
+### Runtime & Framework
+- **Tauri v2**: Native application shell with IPC command system, event emitter, auto-updater plugin, and OS opener plugin
+- **Tokio**: Async runtime with multi-threaded executor, semaphores, MPSC channels, and timers
 
-### Python 3.8+
-- **Role**: Core language
-- **Why I chose it**: Python's extensive standard library, excellent subprocess handling for Git operations, and native JSON support made it ideal. The async potential with `concurrent.futures.ThreadPoolExecutor` handles concurrent operations well.
+### Key Dependencies
 
-### Core Libraries
-
-| Library | Version | Purpose | Why I Chose It |
-|---------|---------|---------|----------------|
-| `requests` | 2.25.0+ | HTTP client for GitHub API | Simple, synchronous API that's easy to debug. I considered `httpx` but didn't need async HTTP. |
-| `subprocess` | stdlib | Git and tar command execution | Standard library, reliable process management with timeouts |
-| `threading` | stdlib | Thread safety primitives | Locks for JSON file access, thread-safe caching |
-| `json` | stdlib | Data serialization | Native Python, no external dependencies needed |
-| `hashlib` | stdlib | MD5 file hashing for incremental archives | Built-in, performant for file comparison |
+| Crate | Purpose |
+|-------|---------|
+| `git2` (0.19) | libgit2 bindings for clone/fetch operations (vendored OpenSSL for cross-compilation) |
+| `reqwest` (0.12) | HTTP client for GitHub API with rustls TLS |
+| `rusqlite` (0.31) | SQLite bindings with bundled SQLite |
+| `tar` (0.4) | Archive creation and extraction |
+| `xz2` (0.1) | XZ/LZMA compression for `.tar.xz` archives |
+| `serde` / `serde_json` | Serialization for IPC and API responses |
+| `thiserror` (2) | Ergonomic error type derivation |
+| `keyring` (3) | OS keychain access (macOS Keychain, Windows Credential Manager, Linux Secret Service) |
+| `dashmap` (6) | Concurrent hash map for task tracking |
+| `tokio-util` (0.7) | Cancellation tokens for task management |
+| `chrono` (0.4) | Date/time handling with serde support |
+| `md-5` (0.10) | MD5 hashing for incremental archive detection |
 
 ### Testing
 
-| Tool | Version | Purpose |
-|------|---------|---------|
-| `pytest` | 7.0.0+ | Unit testing framework |
+| Crate | Purpose |
+|-------|---------|
+| `tempfile` (3) | Temporary directories for test isolation |
+| `mockito` (1) | HTTP request mocking for GitHub API tests |
 
-## Database / Storage
+## Frontend (React + TypeScript)
 
-### JSON File Storage
-- **Primary Database**: `cloned_repos.json`
-- **Why not SQLite?**: For this use case with ~400-500 repositories, JSON provides:
-  - Human-readable format for debugging
-  - Easy backup (just copy the file)
-  - No database driver dependencies
-  - Simple atomic writes via temp file + rename
+### UI Framework
+- **React 19**: Latest React with concurrent features
+- **Tailwind CSS 3**: Utility-first CSS framework
+- **shadcn/ui**: Radix-based component primitives (dialog, dropdown, toast, table, badge, slider, sheet)
+- **Lucide React**: Icon library
 
-### Data Schema
-```json
-{
-  "https://github.com/user/repo.git": {
-    "last_cloned": "2025-01-14 12:00:00",
-    "last_updated": "2025-01-14 13:30:00",
-    "local_path": "data/repo.git",
-    "online_description": "Repository description from GitHub",
-    "status": "active",
-    "last_error": ""
-  }
-}
-```
+### State Management
+- **Zustand 5**: Lightweight store with async actions that call Tauri IPC commands
 
-### File Storage
-- **Repository Data**: `data/<repo-name>.git/` - Shallow git clones
-- **Archives**: `data/<repo-name>.git/versions/*.tar.xz` - XZ compressed tarballs
-- **Archive Metadata**: `data/<repo-name>.git/versions/*.json` - File hashes for incremental archiving
+### Data Display
+- **TanStack Table 8**: Headless table with sorting, filtering, and column management
 
-## External Dependencies
+### Theming
+- **next-themes**: System-aware dark/light theme toggle with persistence
 
-### System Requirements
+### Notifications
+- **Sonner 2**: Toast notification system
 
-| Tool | Purpose | Notes |
-|------|---------|-------|
-| `git` | Clone and pull repositories | Must be in PATH |
-| `tar` | Archive creation | With XZ compression support |
+### Testing
 
-### GitHub APIs
-
-| API | Purpose | Rate Limit |
-|-----|---------|------------|
-| REST API v3 | Individual repo metadata | 60/hr (unauth), 5000/hr (auth) |
-| GraphQL API | Batch status checks (up to 100 repos) | 5000 points/hr (auth) |
+| Tool | Purpose |
+|------|---------|
+| Vitest 4 | Test runner (Vite-native, jest-compatible) |
+| Testing Library (React 16) | Component rendering and interaction testing |
+| jsdom 28 | Browser environment for tests |
 
 ## Infrastructure
 
-### Local Deployment
-This is a desktop application with no server infrastructure. All data is stored locally:
+### CI/CD
+- **GitHub Actions**: Two workflows
+  - `test.yml` — Runs `cargo test`, `cargo clippy`, `pnpm test`, `pnpm build` on every push/PR to main
+  - `release.yml` — Builds cross-platform binaries on tag push (`v*`), creates GitHub draft release
 
-```
-~/Git-Archiver/
-├── src/                    # Application code (v2.0.0)
-├── scripts/                # Utility scripts
-├── tests/                  # Unit tests (pytest)
-├── data/                   # Cloned repos and archives
-├── cloned_repos.json       # Repository database
-└── settings.json           # User settings (token, window size)
-```
+### Release Targets
+| Platform | Target | Format |
+|----------|--------|--------|
+| macOS (Apple Silicon) | `aarch64-apple-darwin` | `.dmg`, `.app.tar.gz` |
+| macOS (Intel) | `x86_64-apple-darwin` | `.dmg`, `.app.tar.gz` |
+| Windows | `x86_64-pc-windows-msvc` | `.exe` (NSIS), `.msi` |
+| Linux | `x86_64-unknown-linux-gnu` | `.deb`, `.rpm`, `.AppImage` |
 
-### Automation Support
-The headless CLI mode enables cron-based automation:
+### Auto-Updater
+- **Tauri Updater Plugin**: Checks for updates from GitHub Releases
+- **Signing**: Ed25519 minisign keys for update verification
 
-```bash
-# Example cron job (daily at 2 AM)
-0 2 * * * cd ~/Git-Archiver && python run.py --headless --update-all
-```
+### Security
+- **GitHub Token**: Stored in OS keychain via `keyring` crate (not plaintext files)
+- **TLS**: rustls (pure Rust, no system OpenSSL dependency)
+- **Input Validation**: URL normalization, GraphQL injection prevention, tar-slip protection on extraction
 
 ## Performance Characteristics
 
 | Metric | Value | Notes |
 |--------|-------|-------|
-| Initial clone speed | ~5-10x faster | Using `--depth 1` shallow clones |
-| Archive space savings | 70-90% | Incremental archives with MD5 diff |
+| Binary size | ~5-7 MB | Stripped + LTO release builds |
+| Concurrent tasks | 1-10 (configurable) | Tokio semaphore-controlled |
+| Archive space savings | 70-90% | Incremental MD5-based diffing |
 | API calls per batch | Up to 100 repos | GraphQL batching |
-| API cache TTL | 5 minutes | Reduces redundant calls |
-| UI responsiveness | Non-blocking | QThread workers for all I/O |
+| Rust test count | 105 | Unit tests across all modules |
+| Frontend test count | 130 | Component + store + hook tests |
 
-## Security Considerations
+## Why This Stack?
 
-### GitHub Token Storage
-- Token stored in `settings.json` (local file)
-- File is gitignored to prevent accidental commits
-- Token provides authenticated API access (5000 req/hr vs 60 req/hr)
+### Why Rust + Tauri over Electron?
+Tauri produces ~5-7MB binaries vs Electron's ~150MB+. Rust provides memory safety, native performance, and no garbage collector pauses. Tauri v2 includes built-in auto-updater, OS keychain access, and cross-platform builds out of the box.
 
-### Data Integrity
-- Atomic JSON writes prevent corruption
-- Automatic backup creation before writes
-- Recovery function can extract valid entries from corrupted JSON
+### Why SQLite over JSON?
+The v1.x app used JSON files which were prone to corruption. SQLite provides ACID transactions, proper schema migrations, cascade deletes, and concurrent-safe access without any manual recovery tooling.
 
-## Development Dependencies
+### Why libgit2 over Git CLI?
+Eliminates the external `git` dependency, provides structured error handling, and enables credential callbacks for authenticated cloning without environment variable manipulation.
 
-```
-# requirements.txt
-PyQt5>=5.15.0      # GUI framework
-requests>=2.25.0   # HTTP client
-pytest>=7.0.0      # Testing (optional)
-```
-
-## Why Not...?
-
-### Why not a web app?
-A desktop application made more sense because:
-- Large file operations (Git clones, archive creation) are local
-- No need for multi-user access
-- Simpler deployment (just run Python)
-- Works offline once repos are cloned
-
-### Why not async/await?
-I considered `asyncio` but:
-- PyQt5 has its own event loop (QThread works better)
-- `subprocess` calls are inherently blocking
-- Threading with locks was simpler to reason about
-
-### Why not a proper database?
-SQLite or PostgreSQL would be overkill:
-- Only ~400-500 records max
-- No complex queries needed
-- JSON is human-readable for debugging
-- Easy to backup and version control
-
-### Why XZ compression?
-- Better compression ratio than gzip (typically 30-50% smaller)
-- Slower compression but faster decompression
-- For archival purposes, compression ratio matters more than speed
+### Why rustls over OpenSSL?
+Pure Rust TLS implementation eliminates system OpenSSL dependency, which was causing cross-compilation failures (ARM64 → x86_64 on macOS). No runtime linking issues across platforms.

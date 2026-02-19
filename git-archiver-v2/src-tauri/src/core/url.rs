@@ -19,6 +19,14 @@ pub fn validate_repo_url(url: &str) -> Result<(), AppError> {
         ));
     }
 
+    // Reject percent-encoded characters to prevent path traversal bypasses
+    // (e.g., %2F..%2F could bypass owner/repo parsing).
+    if url.contains('%') {
+        return Err(AppError::UserVisible(
+            "Repository URL must not contain percent-encoded characters.".to_string(),
+        ));
+    }
+
     // Must start with http:// or https://
     let lower = url.to_lowercase();
     if !lower.starts_with("http://") && !lower.starts_with("https://") {
@@ -286,5 +294,31 @@ mod tests {
     #[test]
     fn test_extract_invalid_url_fails() {
         assert!(extract_owner_repo("not-a-url").is_err());
+    }
+
+    // === percent-encoded URL rejection ===
+
+    #[test]
+    fn test_percent_encoded_path_traversal_rejected() {
+        assert!(
+            validate_repo_url("https://github.com/owner%2F..%2F/repo").is_err(),
+            "Percent-encoded path traversal should be rejected"
+        );
+    }
+
+    #[test]
+    fn test_percent_encoded_slash_rejected() {
+        assert!(
+            validate_repo_url("https://github.com/owner%2Frepo/name").is_err(),
+            "Percent-encoded slash should be rejected"
+        );
+    }
+
+    #[test]
+    fn test_percent_encoded_space_rejected() {
+        assert!(
+            validate_repo_url("https://github.com/owner/repo%20name").is_err(),
+            "Percent-encoded space should be rejected"
+        );
     }
 }

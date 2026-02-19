@@ -20,7 +20,7 @@ where
 {
     // Fail early if destination already contains a .git directory
     if dest.join(".git").exists() || dest.join("HEAD").exists() {
-        return Err(AppError::Custom(format!(
+        return Err(AppError::UserVisible(format!(
             "Destination '{}' already contains a git repository.",
             dest.display()
         )));
@@ -57,11 +57,9 @@ where
     Ok(())
 }
 
-/// Fetch from origin and check if the local repo is behind.
-/// Returns `true` if there are new commits to pull.
-pub fn fetch_and_check_updates(repo_path: &Path) -> Result<bool, AppError> {
-    let repo = Repository::open(repo_path)?;
-
+/// Fetch from origin and compare local HEAD to the remote counterpart.
+/// Returns `None` if up-to-date, or `Some((local_oid, remote_oid, head_refname))` if updates exist.
+fn fetch_and_compare(repo: &Repository) -> Result<Option<(git2::Oid, git2::Oid, String)>, AppError> {
     // Fetch from origin
     let mut remote = repo.find_remote("origin")?;
     remote.fetch(&["refs/heads/*:refs/remotes/origin/*"], None, None)?;
@@ -86,7 +84,23 @@ pub fn fetch_and_check_updates(repo_path: &Path) -> Result<bool, AppError> {
         .target()
         .ok_or_else(|| AppError::Custom("Remote ref has no target OID.".to_string()))?;
 
-    Ok(local_oid != remote_oid)
+    if local_oid == remote_oid {
+        Ok(None)
+    } else {
+        let refname = head
+            .name()
+            .ok_or_else(|| AppError::Custom("HEAD reference has no name.".to_string()))?
+            .to_string();
+        Ok(Some((local_oid, remote_oid, refname)))
+    }
+}
+
+/// Fetch from origin and check if the local repo is behind.
+/// Returns `true` if there are new commits to pull.
+pub fn fetch_and_check_updates(repo_path: &Path) -> Result<bool, AppError> {
+    let repo = Repository::open(repo_path)?;
+    let result = fetch_and_compare(&repo)?;
+    Ok(result.is_some())
 }
 
 /// Pull latest changes from origin (fetch + fast-forward).
@@ -94,33 +108,10 @@ pub fn fetch_and_check_updates(repo_path: &Path) -> Result<bool, AppError> {
 pub fn pull_repo(repo_path: &Path) -> Result<bool, AppError> {
     let repo = Repository::open(repo_path)?;
 
-    // Fetch from origin
-    let mut remote = repo.find_remote("origin")?;
-    remote.fetch(&["refs/heads/*:refs/remotes/origin/*"], None, None)?;
-    remote.disconnect()?;
-
-    // Get local HEAD
-    let head = repo.head()?;
-    let local_oid = head
-        .target()
-        .ok_or_else(|| AppError::Custom("HEAD has no target OID.".to_string()))?;
-
-    // Determine which branch we are on
-    let branch_name = head.shorthand().unwrap_or("main").to_string();
-
-    let remote_ref_name = format!("refs/remotes/origin/{}", branch_name);
-    let remote_ref = repo.find_reference(&remote_ref_name).or_else(|_| {
-        repo.find_reference("FETCH_HEAD")
-    })?;
-
-    let remote_oid = remote_ref
-        .target()
-        .ok_or_else(|| AppError::Custom("Remote ref has no target OID.".to_string()))?;
-
-    // Already up to date
-    if local_oid == remote_oid {
-        return Ok(false);
-    }
+    let (_, remote_oid, refname) = match fetch_and_compare(&repo)? {
+        Some(result) => result,
+        None => return Ok(false), // Already up to date
+    };
 
     // Fast-forward merge
     let remote_annotated_commit = repo.find_annotated_commit(remote_oid)?;
@@ -128,24 +119,20 @@ pub fn pull_repo(repo_path: &Path) -> Result<bool, AppError> {
 
     if merge_analysis.is_fast_forward() {
         // Perform fast-forward by updating the reference
-        let refname = head
-            .name()
-            .ok_or_else(|| AppError::Custom("HEAD reference has no name.".to_string()))?;
-
-        repo.find_reference(refname)?.set_target(
+        repo.find_reference(&refname)?.set_target(
             remote_oid,
             &format!("Fast-forward to {}", remote_oid),
         )?;
 
         // Update the working tree to match the new HEAD
-        repo.set_head(refname)?;
+        repo.set_head(&refname)?;
         repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))?;
 
         Ok(true)
     } else if merge_analysis.is_up_to_date() {
         Ok(false)
     } else {
-        Err(AppError::Custom(
+        Err(AppError::UserVisible(
             "Cannot fast-forward: the local branch has diverged from origin.".to_string(),
         ))
     }

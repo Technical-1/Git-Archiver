@@ -47,6 +47,15 @@ struct RepoResponse {
     private: bool,
 }
 
+/// Validate that a GitHub owner or repository name contains only allowed characters.
+/// GitHub names may contain alphanumeric characters, hyphens, underscores, and dots.
+fn is_valid_github_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+}
+
 /// GitHub API client with optional authentication.
 pub struct GitHubClient {
     client: Client,
@@ -55,8 +64,10 @@ pub struct GitHubClient {
 }
 
 impl GitHubClient {
-    /// Create a new client. If base_url is None, uses https://api.github.com.
-    pub fn new(token: Option<String>, base_url: Option<String>) -> Self {
+    /// Create a new client that always targets https://api.github.com.
+    /// The base_url is hardcoded to prevent SSRF / token exfiltration via
+    /// a malicious URL receiving the user's GitHub token.
+    pub fn new(token: Option<String>) -> Self {
         let client = Client::builder()
             .user_agent("git-archiver")
             .build()
@@ -65,7 +76,23 @@ impl GitHubClient {
         Self {
             client,
             token,
-            base_url: base_url.unwrap_or_else(|| "https://api.github.com".to_string()),
+            base_url: "https://api.github.com".to_string(),
+        }
+    }
+
+    /// Create a client with a custom base_url. Only available in tests
+    /// to allow pointing at a mock server (e.g., mockito on localhost).
+    #[cfg(test)]
+    pub fn new_with_base_url(token: Option<String>, base_url: String) -> Self {
+        let client = Client::builder()
+            .user_agent("git-archiver")
+            .build()
+            .expect("Failed to build HTTP client");
+
+        Self {
+            client,
+            token,
+            base_url,
         }
     }
 
@@ -139,6 +166,23 @@ impl GitHubClient {
             return Ok(Vec::new());
         }
 
+        // Validate all owner/repo names upfront to prevent injection in both
+        // the GraphQL path and the REST path (where names are interpolated into URLs).
+        for (owner, name) in repos {
+            if !is_valid_github_name(owner) {
+                return Err(AppError::UserVisible(format!(
+                    "Invalid GitHub owner name: '{}'. Only alphanumeric characters, hyphens, underscores, and dots are allowed.",
+                    owner
+                )));
+            }
+            if !is_valid_github_name(name) {
+                return Err(AppError::UserVisible(format!(
+                    "Invalid GitHub repository name: '{}'. Only alphanumeric characters, hyphens, underscores, and dots are allowed.",
+                    name
+                )));
+            }
+        }
+
         // GraphQL requires authentication
         if self.token.is_some() {
             match self.batch_get_repo_info_graphql(repos).await {
@@ -163,6 +207,24 @@ impl GitHubClient {
         &self,
         repos: &[(&str, &str)],
     ) -> Result<Vec<RepoInfo>, AppError> {
+        // Validate all owner/repo names to prevent GraphQL injection.
+        // Names are interpolated into the query string, so they must contain
+        // only safe characters (alphanumeric, hyphen, underscore, dot).
+        for (owner, name) in repos {
+            if !is_valid_github_name(owner) {
+                return Err(AppError::UserVisible(format!(
+                    "Invalid GitHub owner name: '{}'. Only alphanumeric characters, hyphens, underscores, and dots are allowed.",
+                    owner
+                )));
+            }
+            if !is_valid_github_name(name) {
+                return Err(AppError::UserVisible(format!(
+                    "Invalid GitHub repository name: '{}'. Only alphanumeric characters, hyphens, underscores, and dots are allowed.",
+                    name
+                )));
+            }
+        }
+
         // Build the GraphQL query with aliased fields
         let mut query_parts = Vec::with_capacity(repos.len());
         for (i, (owner, name)) in repos.iter().enumerate() {
@@ -316,7 +378,7 @@ mod tests {
             .create_async()
             .await;
 
-        let client = GitHubClient::new(Some("test-token".into()), Some(server.url()));
+        let client = GitHubClient::new_with_base_url(Some("test-token".into()), server.url());
         let info = client.get_repo_info("owner", "repo").await.unwrap();
 
         assert_eq!(info.description, Some("A test repo".into()));
@@ -333,7 +395,7 @@ mod tests {
             .create_async()
             .await;
 
-        let client = GitHubClient::new(Some("test-token".into()), Some(server.url()));
+        let client = GitHubClient::new_with_base_url(Some("test-token".into()), server.url());
         let info = client.get_repo_info("owner", "gone").await.unwrap();
         assert!(info.not_found);
     }
@@ -349,7 +411,7 @@ mod tests {
             .create_async()
             .await;
 
-        let client = GitHubClient::new(Some("test-token".into()), Some(server.url()));
+        let client = GitHubClient::new_with_base_url(Some("test-token".into()), server.url());
         let info = client.get_repo_info("owner", "old").await.unwrap();
         assert!(info.archived);
     }
@@ -366,7 +428,7 @@ mod tests {
             .create_async()
             .await;
 
-        let client = GitHubClient::new(Some("my-token".into()), Some(server.url()));
+        let client = GitHubClient::new_with_base_url(Some("my-token".into()), server.url());
         client.get_repo_info("owner", "repo").await.unwrap();
         // If header doesn't match, mockito returns 501 and the test fails
     }
@@ -382,7 +444,7 @@ mod tests {
             .create_async()
             .await;
 
-        let client = GitHubClient::new(None, Some(server.url()));
+        let client = GitHubClient::new_with_base_url(None, server.url());
         let result = client.get_repo_info("owner", "repo").await;
         assert!(result.is_ok());
     }
@@ -400,7 +462,7 @@ mod tests {
             .create_async()
             .await;
 
-        let client = GitHubClient::new(Some("test-token".into()), Some(server.url()));
+        let client = GitHubClient::new_with_base_url(Some("test-token".into()), server.url());
         let rl = client.get_rate_limit().await.unwrap();
         assert_eq!(rl.remaining, 4999);
         assert_eq!(rl.limit, 5000);
@@ -417,7 +479,7 @@ mod tests {
             .create_async()
             .await;
 
-        let client = GitHubClient::new(None, Some(server.url()));
+        let client = GitHubClient::new_with_base_url(None, server.url());
         let result = client.get_repo_info("owner", "repo").await;
         assert!(result.is_err());
     }
@@ -433,7 +495,7 @@ mod tests {
             .create_async()
             .await;
 
-        let client = GitHubClient::new(Some("test-token".into()), Some(server.url()));
+        let client = GitHubClient::new_with_base_url(Some("test-token".into()), server.url());
         let repos = vec![("owner1", "repo1"), ("owner2", "repo2")];
         let results = client.batch_get_repo_info(&repos).await.unwrap();
 
@@ -454,7 +516,7 @@ mod tests {
             .create_async()
             .await;
 
-        let client = GitHubClient::new(None, Some(server.url()));
+        let client = GitHubClient::new_with_base_url(None, server.url());
         let repos = vec![("owner", "repo")];
         let results = client.batch_get_repo_info(&repos).await.unwrap();
 
@@ -488,7 +550,7 @@ mod tests {
             .create_async()
             .await;
 
-        let client = GitHubClient::new(None, Some(server.url()));
+        let client = GitHubClient::new_with_base_url(None, server.url());
         let repos = vec![
             ("owner".into(), "active".into()),
             ("owner".into(), "old".into()),
@@ -500,5 +562,60 @@ mod tests {
         assert_eq!(statuses[0].2, RepoStatus::Active);
         assert_eq!(statuses[1].2, RepoStatus::Archived);
         assert_eq!(statuses[2].2, RepoStatus::Deleted);
+    }
+
+    #[tokio::test]
+    async fn test_graphql_injection_rejected() {
+        // An owner name containing a quote character should be rejected
+        // to prevent GraphQL injection attacks.
+        let mut server = mockito::Server::new_async().await;
+
+        // The GraphQL endpoint should never be called because validation happens first
+        let mock = server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .expect(0) // Expect zero calls
+            .create_async()
+            .await;
+
+        let client = GitHubClient::new_with_base_url(Some("test-token".into()), server.url());
+        let repos = vec![("owner\"injection", "repo")];
+        let result = client.batch_get_repo_info(&repos).await;
+
+        assert!(result.is_err(), "Names with quotes should be rejected");
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("Invalid GitHub owner name"),
+            "Error should mention invalid owner name, got: {}",
+            err_msg
+        );
+
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_graphql_injection_repo_name_rejected() {
+        let mut server = mockito::Server::new_async().await;
+
+        let mock = server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .expect(0)
+            .create_async()
+            .await;
+
+        let client = GitHubClient::new_with_base_url(Some("test-token".into()), server.url());
+        let repos = vec![("owner", "repo\"}){evil}")];
+        let result = client.batch_get_repo_info(&repos).await;
+
+        assert!(result.is_err(), "Repo names with special chars should be rejected");
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("Invalid GitHub repository name"),
+            "Error should mention invalid repo name, got: {}",
+            err_msg
+        );
+
+        mock.assert_async().await;
     }
 }

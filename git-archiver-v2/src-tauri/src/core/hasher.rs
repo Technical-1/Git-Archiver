@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::Path;
 
 use md5::{Digest, Md5};
@@ -40,9 +41,18 @@ fn walk_directory(
         if file_type.is_dir() {
             walk_directory(base, &path, hashes)?;
         } else if file_type.is_file() {
-            let contents = std::fs::read(&path)?;
+            // Stream the file in chunks to avoid loading large files entirely into memory
+            let file = std::fs::File::open(&path)?;
+            let mut reader = std::io::BufReader::new(file);
             let mut hasher = Md5::new();
-            hasher.update(&contents);
+            let mut buf = [0u8; 8192];
+            loop {
+                let n = reader.read(&mut buf)?;
+                if n == 0 {
+                    break;
+                }
+                hasher.update(&buf[..n]);
+            }
             let result = hasher.finalize();
             let hex_hash = format!("{:x}", result);
 

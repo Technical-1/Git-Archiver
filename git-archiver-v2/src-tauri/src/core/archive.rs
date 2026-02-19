@@ -106,14 +106,65 @@ fn add_directory_to_archive<W: std::io::Write>(
 }
 
 /// Extract a .tar.xz archive to the destination directory.
+/// Validates each entry path to prevent tar slip (path traversal) attacks.
 pub fn extract_archive(archive_path: &Path, dest_dir: &Path) -> Result<(), AppError> {
     // Create destination directory if it doesn't exist
     fs::create_dir_all(dest_dir)?;
 
+    let canonical_dest = dest_dir.canonicalize()?;
+
     let file = fs::File::open(archive_path)?;
     let decoder = XzDecoder::new(file);
     let mut archive = tar::Archive::new(decoder);
-    archive.unpack(dest_dir)?;
+
+    // Disable permission preservation to prevent permission manipulation attacks
+    archive.set_preserve_permissions(false);
+
+    // Extract entry-by-entry with path validation instead of using unpack()
+    for entry_result in archive.entries()? {
+        let mut entry = entry_result?;
+        let entry_path = entry.path()?;
+
+        // Reject entries with path traversal components
+        for component in entry_path.components() {
+            match component {
+                std::path::Component::ParentDir => {
+                    return Err(AppError::UserVisible(format!(
+                        "Archive contains path traversal entry: '{}'",
+                        entry_path.display()
+                    )));
+                }
+                std::path::Component::RootDir => {
+                    return Err(AppError::UserVisible(format!(
+                        "Archive contains absolute path entry: '{}'",
+                        entry_path.display()
+                    )));
+                }
+                _ => {}
+            }
+        }
+
+        // Compute the full destination path and verify it stays within dest_dir
+        let dest_path = canonical_dest.join(&*entry_path);
+
+        // Create parent directories if needed
+        if let Some(parent) = dest_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        // After creating parent dirs, canonicalize and verify containment
+        if let Some(parent) = dest_path.parent() {
+            let canonical_parent = parent.canonicalize()?;
+            if !canonical_parent.starts_with(&canonical_dest) {
+                return Err(AppError::UserVisible(format!(
+                    "Archive entry '{}' would extract outside the destination directory.",
+                    entry_path.display()
+                )));
+            }
+        }
+
+        entry.unpack(&dest_path)?;
+    }
 
     Ok(())
 }
@@ -214,5 +265,61 @@ mod tests {
 
         assert_eq!(info.file_count, 0);
         assert!(archive_path.exists());
+    }
+
+    #[test]
+    fn test_extract_rejects_tar_slip_path_traversal() {
+        // Create a tar.xz archive that contains a "../escape.txt" entry (tar slip attack).
+        // The tar crate's set_path() rejects "..", so we must write the path directly
+        // into the raw header bytes to simulate a malicious archive.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let archive_path = tmp.path().join("malicious.tar.xz");
+
+        {
+            let file = fs::File::create(&archive_path).unwrap();
+            let encoder = XzEncoder::new(file, 1);
+            let mut builder = Builder::new(encoder);
+
+            let content = b"malicious content";
+            let mut header = tar::Header::new_gnu();
+            // Set a benign path first to make the header valid
+            header.set_path("safe.txt").unwrap();
+            header.set_size(content.len() as u64);
+            header.set_entry_type(tar::EntryType::Regular);
+            header.set_mode(0o644);
+
+            // Now overwrite the path field in the raw header bytes with "../escape.txt"
+            let header_bytes = header.as_mut_bytes();
+            // The name field occupies bytes 0..100 in a tar header
+            let malicious_path = b"../escape.txt";
+            header_bytes[..malicious_path.len()].copy_from_slice(malicious_path);
+            // Zero out the rest of the name field
+            for b in &mut header_bytes[malicious_path.len()..100] {
+                *b = 0;
+            }
+            header.set_cksum();
+
+            builder.append(&header, &content[..]).unwrap();
+
+            let encoder = builder.into_inner().unwrap();
+            encoder.finish().unwrap();
+        }
+
+        let extract_dir = tmp.path().join("dest");
+        let result = extract_archive(&archive_path, &extract_dir);
+
+        assert!(result.is_err(), "Extracting a tar with ../ path should fail");
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("path traversal"),
+            "Error should mention path traversal, got: {}",
+            err_msg
+        );
+
+        // Verify the escaped file was NOT created
+        assert!(
+            !tmp.path().join("escape.txt").exists(),
+            "File should not have been extracted outside dest_dir"
+        );
     }
 }

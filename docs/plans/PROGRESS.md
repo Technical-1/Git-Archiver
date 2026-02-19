@@ -120,15 +120,15 @@
 
 | Task | Status | Commit | Notes |
 |------|--------|--------|-------|
-| 8.1 App state + command registration | [ ] | | |
-| 8.2 Repository commands | [ ] | | |
-| 8.3 Task commands + worker loop | [ ] | | |
-| 8.4 Archive + settings commands | [ ] | | |
+| 8.1 App state + command registration | [x] | `f4d7e48` | AppState, DB init, keychain, worker spawn |
+| 8.2 Repository commands | [x] | `dbca89c` | add/list/delete/import, BulkAddResult |
+| 8.3 Task commands + worker loop | [x] | `213b0c4` | Worker loop, spawn_blocking, cancellation |
+| 8.4 Archive + settings commands | [x] | `a436fd3` | ArchiveView, keychain token, rate limit |
 
 **Milestone 8 Review:**
-- Code Review: pending
-- Security Audit: pending
-- Tests: pending
+- Code Review: PASS — 3 important issues fixed in `2060e9d`
+- Security Audit: N/A (commands are thin wrappers, security in core modules)
+- Tests: 94 passing, 2 ignored (network)
 
 ---
 
@@ -215,6 +215,7 @@
 | 2026-02-18 | M3-6 | Code Review | PASS | Duplicate fetch logic, streaming hashing, UserVisible error variant | Fixed in `281263c` |
 | 2026-02-18 | M3-6 | Security Audit | 1C/3H/2M/2L | Tar slip, GraphQL injection, base_url SSRF, percent-encoded URL bypass, git credential leak, symlink escape | All fixed in `281263c` |
 | 2026-02-18 | M7 | Code Review | PASS | TOCTOU race in enqueue | Fixed in `676293d` |
+| 2026-02-18 | M8 | Code Review | PASS | Timestamp COALESCE, is_incremental read, lock ordering | Fixed in `2060e9d` |
 
 ---
 

@@ -156,11 +156,35 @@ async fn handle_clone_inner(
         std::fs::create_dir_all(parent)?;
     }
 
-    // Clone the repository (blocking git2 operation)
+    // Clone the repository (blocking git2 operation) with progress reporting
     let url = repo.url.clone();
     let dest = clone_path.clone();
+    let clone_app = app_handle.clone();
+    let clone_repo_url = repo.url.clone();
+    let cancel_token = task_manager.get_cancellation_token(repo_id);
     tokio::task::spawn_blocking(move || {
-        git::clone_repo::<fn(f32, &str) -> bool>(&url, &dest, None)
+        git::clone_repo(
+            &url,
+            &dest,
+            Some(move |pct: f32, msg: &str| -> bool {
+                // Check cancellation
+                if let Some(ref token) = cancel_token {
+                    if token.is_cancelled() {
+                        return false;
+                    }
+                }
+                let _ = clone_app.emit(
+                    "task-progress",
+                    &TaskProgress {
+                        repo_url: clone_repo_url.clone(),
+                        stage: TaskStage::Cloning,
+                        progress: Some(pct as f64),
+                        message: Some(msg.to_string()),
+                    },
+                );
+                true
+            }),
+        )
     })
     .await
     .map_err(|e| AppError::Custom(format!("Clone task panicked: {}", e)))??;
@@ -172,21 +196,7 @@ async fn handle_clone_inner(
         }
     }
 
-    // Emit progress: archiving
-    let _ = app_handle.emit(
-        "task-progress",
-        &TaskProgress {
-            repo_url: repo.url.clone(),
-            stage: TaskStage::Archiving,
-            progress: Some(0.5),
-            message: Some(format!(
-                "Creating archive for {}/{}...",
-                repo.owner, repo.name
-            )),
-        },
-    );
-
-    // Create initial archive
+    // Create initial archive with progress reporting
     let timestamp = Utc::now().format("%Y%m%d-%H%M%S");
     let versions_dir = clone_path.join("versions");
     let archive_filename = format!("{}-{}.tar.xz", repo.name, timestamp);
@@ -194,10 +204,38 @@ async fn handle_clone_inner(
 
     let src_dir = clone_path.clone();
     let arch_path = archive_path.clone();
-    let archive_info =
-        tokio::task::spawn_blocking(move || archive::create_archive(&src_dir, &arch_path, None))
-            .await
-            .map_err(|e| AppError::Custom(format!("Archive task panicked: {}", e)))??;
+    let archive_app = app_handle.clone();
+    let archive_repo_url = repo.url.clone();
+    let archive_owner = repo.owner.clone();
+    let archive_name = repo.name.clone();
+    let archive_info = tokio::task::spawn_blocking(move || {
+        archive::create_archive(
+            &src_dir,
+            &arch_path,
+            None,
+            Some(move |processed: u32, total: u32| {
+                let pct = if total > 0 {
+                    processed as f64 / total as f64
+                } else {
+                    0.0
+                };
+                let _ = archive_app.emit(
+                    "task-progress",
+                    &TaskProgress {
+                        repo_url: archive_repo_url.clone(),
+                        stage: TaskStage::Archiving,
+                        progress: Some(pct),
+                        message: Some(format!(
+                            "Archiving {}/{}: {}/{} files",
+                            archive_owner, archive_name, processed, total
+                        )),
+                    },
+                );
+            }),
+        )
+    })
+    .await
+    .map_err(|e| AppError::Custom(format!("Archive task panicked: {}", e)))??;
 
     // Compute file hashes for future incremental detection
     let hash_dir = clone_path.clone();
@@ -367,20 +405,6 @@ async fn handle_update_inner(
         .await
         .map_err(|e| AppError::Custom(format!("Pull task panicked: {}", e)))??;
 
-    // Emit progress: archiving
-    let _ = app_handle.emit(
-        "task-progress",
-        &TaskProgress {
-            repo_url: repo.url.clone(),
-            stage: TaskStage::Archiving,
-            progress: Some(0.5),
-            message: Some(format!(
-                "Creating archive for {}/{}...",
-                repo.owner, repo.name
-            )),
-        },
-    );
-
     // Get old file hashes and compute new ones to detect changes
     let old_hashes = {
         let db = db.lock().await;
@@ -413,8 +437,35 @@ async fn handle_update_inner(
     } else {
         None
     };
+    let archive_app = app_handle.clone();
+    let archive_repo_url = repo.url.clone();
+    let archive_owner = repo.owner.clone();
+    let archive_name = repo.name.clone();
     let archive_info = tokio::task::spawn_blocking(move || {
-        archive::create_archive(&src_dir, &arch_path, changed.as_deref())
+        archive::create_archive(
+            &src_dir,
+            &arch_path,
+            changed.as_deref(),
+            Some(move |processed: u32, total: u32| {
+                let pct = if total > 0 {
+                    processed as f64 / total as f64
+                } else {
+                    0.0
+                };
+                let _ = archive_app.emit(
+                    "task-progress",
+                    &TaskProgress {
+                        repo_url: archive_repo_url.clone(),
+                        stage: TaskStage::Archiving,
+                        progress: Some(pct),
+                        message: Some(format!(
+                            "Archiving {}/{}: {}/{} files",
+                            archive_owner, archive_name, processed, total
+                        )),
+                    },
+                );
+            }),
+        )
     })
     .await
     .map_err(|e| AppError::Custom(format!("Archive task panicked: {}", e)))??;

@@ -17,11 +17,17 @@ pub struct ArchiveInfo {
 /// If `changed_files_only` is Some, only include those files (incremental archive).
 /// If None, include all files (full archive).
 /// Excludes .git/ and versions/ directories from full archives.
-pub fn create_archive(
+///
+/// `on_progress`: optional callback receiving (files_processed, total_files).
+pub fn create_archive<F>(
     source_dir: &Path,
     archive_path: &Path,
     changed_files_only: Option<&[String]>,
-) -> Result<ArchiveInfo, AppError> {
+    on_progress: Option<F>,
+) -> Result<ArchiveInfo, AppError>
+where
+    F: Fn(u32, u32),
+{
     // Create parent directories for archive_path if needed
     if let Some(parent) = archive_path.parent() {
         fs::create_dir_all(parent)?;
@@ -34,18 +40,29 @@ pub fn create_archive(
 
     match changed_files_only {
         Some(files) => {
-            // Incremental archive: only add specified files
+            let total = files.len() as u32;
             for relative_path in files {
                 let full_path = source_dir.join(relative_path);
                 if full_path.is_file() {
                     builder.append_path_with_name(&full_path, relative_path)?;
                     file_count += 1;
+                    if let Some(ref cb) = on_progress {
+                        cb(file_count, total);
+                    }
                 }
             }
         }
         None => {
-            // Full archive: walk the directory, excluding .git/ and versions/
-            file_count = add_directory_to_archive(&mut builder, source_dir, source_dir)?;
+            // Pre-count files for progress reporting
+            let total = count_files_recursive(source_dir);
+            file_count = add_directory_to_archive(
+                &mut builder,
+                source_dir,
+                source_dir,
+                &on_progress,
+                &mut 0u32,
+                total,
+            )?;
         }
     }
 
@@ -63,11 +80,40 @@ pub fn create_archive(
     })
 }
 
+/// Count files recursively, excluding .git/ and versions/.
+fn count_files_recursive(dir: &Path) -> u32 {
+    let mut count = 0u32;
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return 0,
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str == ".git" || name_str == "versions" {
+            continue;
+        }
+        let ft = match entry.file_type() {
+            Ok(ft) => ft,
+            Err(_) => continue,
+        };
+        if ft.is_dir() {
+            count += count_files_recursive(&entry.path());
+        } else if ft.is_file() {
+            count += 1;
+        }
+    }
+    count
+}
+
 /// Recursively add files from a directory to a tar archive, excluding .git/ and versions/.
-fn add_directory_to_archive<W: std::io::Write>(
+fn add_directory_to_archive<W: std::io::Write, F: Fn(u32, u32)>(
     builder: &mut Builder<W>,
     base: &Path,
     current: &Path,
+    on_progress: &Option<F>,
+    processed: &mut u32,
+    total: u32,
 ) -> Result<u32, AppError> {
     let mut count: u32 = 0;
     let entries = fs::read_dir(current)?;
@@ -86,12 +132,12 @@ fn add_directory_to_archive<W: std::io::Write>(
         let file_type = entry.file_type()?;
 
         if file_type.is_dir() {
-            count += add_directory_to_archive(builder, base, &path)?;
+            count +=
+                add_directory_to_archive(builder, base, &path, on_progress, processed, total)?;
         } else if file_type.is_file() {
             let relative = path
                 .strip_prefix(base)
                 .map_err(|e| AppError::Custom(format!("Failed to compute relative path: {}", e)))?;
-            // Use forward slashes for cross-platform consistency
             let relative_str = relative
                 .components()
                 .map(|c| c.as_os_str().to_string_lossy().to_string())
@@ -99,6 +145,10 @@ fn add_directory_to_archive<W: std::io::Write>(
                 .join("/");
             builder.append_path_with_name(&path, &relative_str)?;
             count += 1;
+            *processed += 1;
+            if let Some(ref cb) = on_progress {
+                cb(*processed, total);
+            }
         }
     }
 
@@ -188,7 +238,7 @@ mod tests {
         fs::write(src.join("file2.txt"), "world").unwrap();
 
         let archive_path = tmp.path().join("test.tar.xz");
-        let info = create_archive(&src, &archive_path, None).unwrap();
+        let info = create_archive::<fn(u32, u32)>(&src, &archive_path, None, None).unwrap();
 
         assert!(archive_path.exists());
         assert_eq!(info.file_count, 2);
@@ -205,7 +255,7 @@ mod tests {
 
         let changed_files = vec!["changed.txt".to_string()];
         let archive_path = tmp.path().join("incremental.tar.xz");
-        let info = create_archive(&src, &archive_path, Some(&changed_files)).unwrap();
+        let info = create_archive::<fn(u32, u32)>(&src, &archive_path, Some(&changed_files), None).unwrap();
 
         assert!(archive_path.exists());
         assert_eq!(info.file_count, 1);
@@ -219,7 +269,7 @@ mod tests {
         fs::write(src.join("file1.txt"), "hello").unwrap();
 
         let archive_path = tmp.path().join("test.tar.xz");
-        create_archive(&src, &archive_path, None).unwrap();
+        create_archive::<fn(u32, u32)>(&src, &archive_path, None, None).unwrap();
 
         let extract_dir = tmp.path().join("extracted");
         extract_archive(&archive_path, &extract_dir).unwrap();
@@ -239,7 +289,7 @@ mod tests {
         fs::write(src.join(".git/config"), "gitconfig").unwrap();
 
         let archive_path = tmp.path().join("test.tar.xz");
-        let info = create_archive(&src, &archive_path, None).unwrap();
+        let info = create_archive::<fn(u32, u32)>(&src, &archive_path, None, None).unwrap();
 
         assert_eq!(info.file_count, 1); // only file.txt, not .git/config
     }
@@ -261,7 +311,7 @@ mod tests {
         fs::create_dir(&src).unwrap();
 
         let archive_path = tmp.path().join("empty.tar.xz");
-        let info = create_archive(&src, &archive_path, None).unwrap();
+        let info = create_archive::<fn(u32, u32)>(&src, &archive_path, None, None).unwrap();
 
         assert_eq!(info.file_count, 0);
         assert!(archive_path.exists());

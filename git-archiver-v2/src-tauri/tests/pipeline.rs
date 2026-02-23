@@ -160,7 +160,7 @@ fn test_full_clone_pipeline() {
     // Step 3: Create full archive
     let versions_dir = clone_path.join("versions");
     let archive_path = versions_dir.join("test-repo-20260101-000000.tar.xz");
-    let archive_info = archive::create_archive(&clone_path, &archive_path, None)
+    let archive_info = archive::create_archive::<fn(u32, u32)>(&clone_path, &archive_path, None, None)
         .expect("Archive creation should succeed");
 
     assert!(archive_path.exists());
@@ -257,7 +257,7 @@ fn test_update_with_incremental_archive() {
     // Create incremental archive
     let versions_dir = clone_path.join("versions");
     let archive_path = versions_dir.join("test-repo-20260101-000001-incremental.tar.xz");
-    let archive_info = archive::create_archive(&clone_path, &archive_path, Some(&changed_files))
+    let archive_info = archive::create_archive::<fn(u32, u32)>(&clone_path, &archive_path, Some(&changed_files), None)
         .expect("Incremental archive should succeed");
 
     assert!(archive_path.exists());
@@ -321,7 +321,7 @@ fn test_clone_archive_extract_roundtrip() {
 
     // Create archive
     let archive_path = tmp.path().join("archives").join("test.tar.xz");
-    archive::create_archive(&clone_path, &archive_path, None)
+    archive::create_archive::<fn(u32, u32)>(&clone_path, &archive_path, None, None)
         .expect("Archive creation should succeed");
 
     // Extract to a new location

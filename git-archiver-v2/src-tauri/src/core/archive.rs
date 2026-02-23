@@ -132,8 +132,7 @@ fn add_directory_to_archive<W: std::io::Write, F: Fn(u32, u32)>(
         let file_type = entry.file_type()?;
 
         if file_type.is_dir() {
-            count +=
-                add_directory_to_archive(builder, base, &path, on_progress, processed, total)?;
+            count += add_directory_to_archive(builder, base, &path, on_progress, processed, total)?;
         } else if file_type.is_file() {
             let relative = path
                 .strip_prefix(base)
@@ -255,7 +254,8 @@ mod tests {
 
         let changed_files = vec!["changed.txt".to_string()];
         let archive_path = tmp.path().join("incremental.tar.xz");
-        let info = create_archive::<fn(u32, u32)>(&src, &archive_path, Some(&changed_files), None).unwrap();
+        let info = create_archive::<fn(u32, u32)>(&src, &archive_path, Some(&changed_files), None)
+            .unwrap();
 
         assert!(archive_path.exists());
         assert_eq!(info.file_count, 1);

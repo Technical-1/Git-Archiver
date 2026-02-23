@@ -44,7 +44,12 @@ pub async fn add_repo(url: String, state: State<'_, AppState>) -> Result<Reposit
     // Auto-clone the newly added repo
     if let Some(id) = repo.id {
         if let Err(e) = state.task_manager.enqueue(Task::Clone(id)).await {
-            log::warn!("Auto-clone enqueue failed for {}/{}: {}", owner, repo_name, e);
+            log::warn!(
+                "Auto-clone enqueue failed for {}/{}: {}",
+                owner,
+                repo_name,
+                e
+            );
         }
     }
 

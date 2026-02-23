@@ -1,8 +1,8 @@
 mod commands;
-mod core;
-mod db;
-mod error;
-mod models;
+pub mod core;
+pub mod db;
+pub mod error;
+pub mod models;
 mod state;
 
 use std::sync::Arc;

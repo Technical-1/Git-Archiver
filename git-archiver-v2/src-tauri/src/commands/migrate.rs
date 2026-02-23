@@ -447,7 +447,7 @@ mod tests {
         let mut repos_imported: u32 = 0;
         let mut errors: Vec<String> = Vec::new();
 
-        for (url, _entry) in &legacy_data {
+        for url in legacy_data.keys() {
             if let Err(e) = validate_repo_url(url) {
                 errors.push(format!("{}: {}", url, e));
                 continue;
@@ -508,7 +508,7 @@ mod tests {
         let mut repos_imported: u32 = 0;
         let mut repos_skipped: u32 = 0;
 
-        for (url, _entry) in &legacy_data {
+        for url in legacy_data.keys() {
             if validate_repo_url(url).is_err() {
                 continue;
             }

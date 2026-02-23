@@ -18,6 +18,9 @@ pub async fn get_settings(state: State<'_, AppState>) -> Result<AppSettings, App
 ///
 /// If `token` is provided, it is stored in the OS keychain.
 /// The token is never persisted in the database or returned to the frontend.
+///
+/// When `sync_time` changes, the scheduler is notified via a watch channel
+/// so it can recalculate its next wake-up time without a restart.
 #[tauri::command]
 pub async fn save_settings(
     settings: AppSettings,
@@ -26,6 +29,13 @@ pub async fn save_settings(
 ) -> Result<(), AppError> {
     let mut db = state.db.lock().await;
     db::settings::save_app_settings(&mut db, &settings)?;
+
+    // Notify the scheduler of sync_time changes
+    let new_sync_time = settings
+        .sync_time
+        .as_deref()
+        .and_then(|s| chrono::NaiveTime::parse_from_str(s, "%H:%M").ok());
+    let _ = state.sync_time_tx.send(new_sync_time);
 
     // Save token to keychain if provided
     if let Some(ref token_value) = token {

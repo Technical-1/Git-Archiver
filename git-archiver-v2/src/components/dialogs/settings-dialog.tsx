@@ -28,8 +28,8 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const [token, setToken] = useState("");
   const [showToken, setShowToken] = useState(false);
   const [maxConcurrent, setMaxConcurrent] = useState(4);
-  const [autoUpdateEnabled, setAutoUpdateEnabled] = useState(false);
-  const [autoUpdateInterval, setAutoUpdateInterval] = useState(60);
+  const [syncEnabled, setSyncEnabled] = useState(false);
+  const [syncTime, setSyncTime] = useState("05:00");
   const [rateLimit, setRateLimit] = useState<RateLimitInfo | null>(null);
   const [testingToken, setTestingToken] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -40,8 +40,8 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
       setToken("");
       setShowToken(false);
       setMaxConcurrent(settings.max_concurrent_tasks);
-      setAutoUpdateEnabled(settings.auto_check_interval_minutes !== null);
-      setAutoUpdateInterval(settings.auto_check_interval_minutes ?? 60);
+      setSyncEnabled(settings.sync_time !== null);
+      setSyncTime(settings.sync_time ?? "05:00");
       setRateLimit(null);
     }
   }, [open, settings]);
@@ -73,9 +73,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
       const updatedSettings = {
         ...settings,
         max_concurrent_tasks: maxConcurrent,
-        auto_check_interval_minutes: autoUpdateEnabled
-          ? autoUpdateInterval
-          : null,
+        sync_time: syncEnabled ? syncTime : null,
       };
       await saveSettings(updatedSettings, token || undefined);
       toast({
@@ -171,41 +169,37 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
             </p>
           </div>
 
-          {/* Auto-update */}
+          {/* Daily Sync */}
           <div className="space-y-2">
             <div className="flex items-center gap-2">
               <input
                 type="checkbox"
-                id="auto-update"
-                checked={autoUpdateEnabled}
-                onChange={(e) => setAutoUpdateEnabled(e.target.checked)}
+                id="daily-sync"
+                checked={syncEnabled}
+                onChange={(e) => setSyncEnabled(e.target.checked)}
                 className="h-4 w-4 rounded border-input"
               />
-              <label htmlFor="auto-update" className="text-sm font-medium">
-                Enable auto-update
+              <label htmlFor="daily-sync" className="text-sm font-medium">
+                Enable daily sync
               </label>
             </div>
-            {autoUpdateEnabled && (
+            {syncEnabled && (
               <div className="flex items-center gap-2 ml-6">
-                <label htmlFor="interval" className="text-sm text-muted-foreground">
-                  Check every
+                <label htmlFor="sync-time" className="text-sm text-muted-foreground">
+                  Sync at
                 </label>
                 <Input
-                  id="interval"
-                  type="number"
-                  min={1}
-                  max={1440}
-                  value={autoUpdateInterval}
-                  onChange={(e) =>
-                    setAutoUpdateInterval(
-                      Math.max(1, Math.min(1440, Number(e.target.value))),
-                    )
-                  }
-                  className="w-20"
+                  id="sync-time"
+                  type="time"
+                  value={syncTime}
+                  onChange={(e) => setSyncTime(e.target.value)}
+                  className="w-32"
                 />
-                <span className="text-sm text-muted-foreground">minutes</span>
               </div>
             )}
+            <p className="text-xs text-muted-foreground ml-6">
+              Automatically check all repos for updates at the scheduled time.
+            </p>
           </div>
 
           {/* Data Path */}

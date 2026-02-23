@@ -13,7 +13,7 @@ const defaultSettings: AppSettings = {
   data_dir: "data",
   archive_format: "tar.xz",
   max_concurrent_tasks: 4,
-  auto_check_interval_minutes: null,
+  sync_time: null,
 };
 
 export const useSettingsStore = create<SettingsStore>((set) => ({

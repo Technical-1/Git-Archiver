@@ -18,7 +18,7 @@ describe("SettingsDialog", () => {
         data_dir: "data",
         archive_format: "tar.xz",
         max_concurrent_tasks: 4,
-        auto_check_interval_minutes: null,
+        sync_time: null,
       },
       saveSettings: mockSaveSettings,
     });
@@ -69,19 +69,19 @@ describe("SettingsDialog", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows auto-update checkbox", () => {
+  it("shows daily sync checkbox", () => {
     render(<SettingsDialog open={true} onOpenChange={() => {}} />);
-    expect(screen.getByLabelText("Enable auto-update")).toBeInTheDocument();
+    expect(screen.getByLabelText("Enable daily sync")).toBeInTheDocument();
   });
 
-  it("shows interval input when auto-update is enabled", () => {
+  it("shows time picker when daily sync is enabled", () => {
     render(<SettingsDialog open={true} onOpenChange={() => {}} />);
 
-    const checkbox = screen.getByLabelText("Enable auto-update");
-    expect(screen.queryByLabelText("Check every")).not.toBeInTheDocument();
+    const checkbox = screen.getByLabelText("Enable daily sync");
+    expect(screen.queryByLabelText("Sync at")).not.toBeInTheDocument();
 
     fireEvent.click(checkbox);
-    expect(screen.getByLabelText("Check every")).toBeInTheDocument();
+    expect(screen.getByLabelText("Sync at")).toBeInTheDocument();
   });
 
   it("shows data path as read-only", () => {
@@ -101,7 +101,7 @@ describe("SettingsDialog", () => {
       expect(mockSaveSettings).toHaveBeenCalledWith(
         expect.objectContaining({
           max_concurrent_tasks: 4,
-          auto_check_interval_minutes: null,
+          sync_time: null,
         }),
         undefined,
       );
@@ -137,13 +137,13 @@ describe("SettingsDialog", () => {
     });
   });
 
-  it("loads auto-update interval from settings", () => {
+  it("loads sync time from settings", () => {
     useSettingsStore.setState({
       settings: {
         data_dir: "data",
         archive_format: "tar.xz",
         max_concurrent_tasks: 8,
-        auto_check_interval_minutes: 30,
+        sync_time: "06:30",
       },
       saveSettings: mockSaveSettings,
     });
@@ -153,10 +153,10 @@ describe("SettingsDialog", () => {
       screen.getByText("Max Parallel Operations: 8"),
     ).toBeInTheDocument();
     expect(
-      (screen.getByLabelText("Enable auto-update") as HTMLInputElement).checked,
+      (screen.getByLabelText("Enable daily sync") as HTMLInputElement).checked,
     ).toBe(true);
     expect(
-      (screen.getByLabelText("Check every") as HTMLInputElement).value,
-    ).toBe("30");
+      (screen.getByLabelText("Sync at") as HTMLInputElement).value,
+    ).toBe("06:30");
   });
 });

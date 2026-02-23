@@ -46,7 +46,8 @@ export interface AppSettings {
   data_dir: string;
   archive_format: string;
   max_concurrent_tasks: number;
-  auto_check_interval_minutes: number | null;
+  /** Daily sync time in "HH:MM" format (e.g., "05:00"), or null if disabled. */
+  sync_time: string | null;
 }
 
 export interface RateLimitInfo {

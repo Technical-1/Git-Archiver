@@ -10,7 +10,7 @@ const mockSettings: AppSettings = {
   data_dir: "/custom/data",
   archive_format: "tar.gz",
   max_concurrent_tasks: 8,
-  auto_check_interval_minutes: 60,
+  sync_time: "05:00",
 };
 
 describe("settings-store", () => {
@@ -20,7 +20,7 @@ describe("settings-store", () => {
         data_dir: "data",
         archive_format: "tar.xz",
         max_concurrent_tasks: 4,
-        auto_check_interval_minutes: null,
+        sync_time: null,
       },
       loading: false,
     });
@@ -32,7 +32,7 @@ describe("settings-store", () => {
     expect(state.settings.data_dir).toBe("data");
     expect(state.settings.archive_format).toBe("tar.xz");
     expect(state.settings.max_concurrent_tasks).toBe(4);
-    expect(state.settings.auto_check_interval_minutes).toBeNull();
+    expect(state.settings.sync_time).toBeNull();
     expect(state.loading).toBe(false);
   });
 

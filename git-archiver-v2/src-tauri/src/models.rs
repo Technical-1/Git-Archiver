@@ -94,7 +94,8 @@ pub struct AppSettings {
     pub data_dir: String,
     pub archive_format: String,
     pub max_concurrent_tasks: u32,
-    pub auto_check_interval_minutes: Option<u32>,
+    /// Daily sync time in "HH:MM" format (e.g., "05:00"), or None if disabled.
+    pub sync_time: Option<String>,
 }
 
 impl Default for AppSettings {
@@ -103,7 +104,7 @@ impl Default for AppSettings {
             data_dir: "data".to_string(),
             archive_format: "tar.xz".to_string(),
             max_concurrent_tasks: 4,
-            auto_check_interval_minutes: None,
+            sync_time: None,
         }
     }
 }

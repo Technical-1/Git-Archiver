@@ -8,7 +8,7 @@ const ALLOWED_SETTING_KEYS: &[&str] = &[
     "data_dir",
     "archive_format",
     "max_concurrent_tasks",
-    "auto_check_interval_minutes",
+    "sync_time",
 ];
 
 /// Get a single setting value by key.
@@ -51,14 +51,13 @@ pub fn get_app_settings(conn: &Connection) -> Result<AppSettings, AppError> {
         .and_then(|v| v.parse::<u32>().ok())
         .unwrap_or(defaults.max_concurrent_tasks);
 
-    let auto_check_interval_minutes =
-        get_setting(conn, "auto_check_interval_minutes")?.and_then(|v| v.parse::<u32>().ok());
+    let sync_time = get_setting(conn, "sync_time")?;
 
     Ok(AppSettings {
         data_dir,
         archive_format,
         max_concurrent_tasks,
-        auto_check_interval_minutes,
+        sync_time,
     })
 }
 
@@ -90,16 +89,10 @@ pub fn save_app_settings(conn: &mut Connection, settings: &AppSettings) -> Resul
         "max_concurrent_tasks",
         &settings.max_concurrent_tasks.to_string(),
     )?;
-    match &settings.auto_check_interval_minutes {
-        Some(interval) => {
-            set_setting_in_tx(&tx, "auto_check_interval_minutes", &interval.to_string())?
-        }
+    match &settings.sync_time {
+        Some(time) => set_setting_in_tx(&tx, "sync_time", time)?,
         None => {
-            // Remove the key if the value is None
-            tx.execute(
-                "DELETE FROM settings WHERE key = 'auto_check_interval_minutes'",
-                [],
-            )?;
+            tx.execute("DELETE FROM settings WHERE key = 'sync_time'", [])?;
         }
     }
 
@@ -158,10 +151,7 @@ mod tests {
         assert_eq!(settings.data_dir, defaults.data_dir);
         assert_eq!(settings.archive_format, defaults.archive_format);
         assert_eq!(settings.max_concurrent_tasks, defaults.max_concurrent_tasks);
-        assert_eq!(
-            settings.auto_check_interval_minutes,
-            defaults.auto_check_interval_minutes
-        );
+        assert_eq!(settings.sync_time, defaults.sync_time);
     }
 
     #[test]
@@ -172,7 +162,7 @@ mod tests {
             data_dir: "/custom/data".to_string(),
             archive_format: "tar.gz".to_string(),
             max_concurrent_tasks: 8,
-            auto_check_interval_minutes: Some(30),
+            sync_time: Some("05:00".to_string()),
         };
 
         save_app_settings(&mut conn, &settings).unwrap();
@@ -181,15 +171,15 @@ mod tests {
         assert_eq!(loaded.data_dir, "/custom/data");
         assert_eq!(loaded.archive_format, "tar.gz");
         assert_eq!(loaded.max_concurrent_tasks, 8);
-        assert_eq!(loaded.auto_check_interval_minutes, Some(30));
+        assert_eq!(loaded.sync_time, Some("05:00".to_string()));
 
-        // Now save with None interval and verify it is cleared
+        // Now save with None sync_time and verify it is cleared
         let settings2 = AppSettings {
-            auto_check_interval_minutes: None,
+            sync_time: None,
             ..settings
         };
         save_app_settings(&mut conn, &settings2).unwrap();
         let loaded2 = get_app_settings(&conn).unwrap();
-        assert_eq!(loaded2.auto_check_interval_minutes, None);
+        assert_eq!(loaded2.sync_time, None);
     }
 }

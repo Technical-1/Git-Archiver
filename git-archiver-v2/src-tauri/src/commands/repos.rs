@@ -1,6 +1,7 @@
 use serde::Serialize;
 use tauri::State;
 
+use crate::core::task_manager::Task;
 use crate::core::url::{extract_owner_repo, normalize_repo_url, validate_repo_url};
 use crate::db;
 use crate::error::AppError;
@@ -17,27 +18,36 @@ pub struct BulkAddResult {
 
 /// Add a single repository by URL.
 ///
-/// Normalizes and validates the URL, extracts owner/repo, and inserts into the DB.
-/// Returns the newly created repository record.
+/// Normalizes and validates the URL, extracts owner/repo, inserts into the DB,
+/// and automatically enqueues a clone task.
 #[tauri::command]
 pub async fn add_repo(url: String, state: State<'_, AppState>) -> Result<Repository, AppError> {
-    // Validate the raw URL first
     validate_repo_url(&url)?;
 
     let normalized = normalize_repo_url(&url);
     let (owner, repo_name) = extract_owner_repo(&normalized)?;
 
-    let db = state.db.lock().await;
+    // Scope the DB lock so it's dropped before the async enqueue
+    let repo = {
+        let db = state.db.lock().await;
 
-    // Check for duplicate
-    if let Some(_existing) = db::repos::get_repo_by_url(&db, &normalized)? {
-        return Err(AppError::UserVisible(format!(
-            "Repository '{}' is already tracked.",
-            normalized
-        )));
+        if let Some(_existing) = db::repos::get_repo_by_url(&db, &normalized)? {
+            return Err(AppError::UserVisible(format!(
+                "Repository '{}' is already tracked.",
+                normalized
+            )));
+        }
+
+        db::repos::insert_repo(&db, &owner, &repo_name, &normalized)?
+    };
+
+    // Auto-clone the newly added repo
+    if let Some(id) = repo.id {
+        if let Err(e) = state.task_manager.enqueue(Task::Clone(id)).await {
+            log::warn!("Auto-clone enqueue failed for {}/{}: {}", owner, repo_name, e);
+        }
     }
 
-    let repo = db::repos::insert_repo(&db, &owner, &repo_name, &normalized)?;
     Ok(repo)
 }
 
@@ -110,7 +120,8 @@ pub async fn delete_repo(
 
 /// Import repository URLs from a text file (one URL per line).
 ///
-/// Validates each URL, skips duplicates, and returns a summary of what happened.
+/// Validates each URL, skips duplicates, inserts into the DB,
+/// and automatically enqueues clone tasks for all newly added repos.
 #[tauri::command]
 pub async fn import_from_file(
     path: String,
@@ -122,46 +133,60 @@ pub async fn import_from_file(
     let mut added: u32 = 0;
     let mut skipped: u32 = 0;
     let mut errors: Vec<String> = Vec::new();
+    let mut new_repo_ids: Vec<i64> = Vec::new();
 
-    let db = state.db.lock().await;
+    // Scope the DB lock — drop before async enqueue operations
+    {
+        let db = state.db.lock().await;
 
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
 
-        // Validate
-        if let Err(e) = validate_repo_url(trimmed) {
-            errors.push(format!("{}: {}", trimmed, e));
-            continue;
-        }
-
-        let normalized = normalize_repo_url(trimmed);
-        let (owner, repo_name) = match extract_owner_repo(&normalized) {
-            Ok(pair) => pair,
-            Err(e) => {
+            if let Err(e) = validate_repo_url(trimmed) {
                 errors.push(format!("{}: {}", trimmed, e));
                 continue;
             }
-        };
 
-        // Check for duplicate
-        match db::repos::get_repo_by_url(&db, &normalized) {
-            Ok(Some(_)) => {
-                skipped += 1;
-                continue;
+            let normalized = normalize_repo_url(trimmed);
+            let (owner, repo_name) = match extract_owner_repo(&normalized) {
+                Ok(pair) => pair,
+                Err(e) => {
+                    errors.push(format!("{}: {}", trimmed, e));
+                    continue;
+                }
+            };
+
+            match db::repos::get_repo_by_url(&db, &normalized) {
+                Ok(Some(_)) => {
+                    skipped += 1;
+                    continue;
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    errors.push(format!("{}: {}", trimmed, e));
+                    continue;
+                }
             }
-            Ok(None) => {}
-            Err(e) => {
-                errors.push(format!("{}: {}", trimmed, e));
-                continue;
+
+            match db::repos::insert_repo(&db, &owner, &repo_name, &normalized) {
+                Ok(repo) => {
+                    added += 1;
+                    if let Some(id) = repo.id {
+                        new_repo_ids.push(id);
+                    }
+                }
+                Err(e) => errors.push(format!("{}: {}", trimmed, e)),
             }
         }
+    } // DB lock dropped here
 
-        match db::repos::insert_repo(&db, &owner, &repo_name, &normalized) {
-            Ok(_) => added += 1,
-            Err(e) => errors.push(format!("{}: {}", trimmed, e)),
+    // Auto-clone all newly added repos
+    for id in new_repo_ids {
+        if let Err(e) = state.task_manager.enqueue(Task::Clone(id)).await {
+            log::warn!("Auto-clone enqueue failed for repo {}: {}", id, e);
         }
     }
 

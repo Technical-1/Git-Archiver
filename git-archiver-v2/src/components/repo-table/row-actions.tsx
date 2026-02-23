@@ -41,14 +41,14 @@ export function RowActions({ repo }: RowActionsProps) {
   const handleUpdate = async () => {
     if (repo.id === null) return;
     try {
-      if (repo.status === "pending") {
+      if (repo.status === "pending" || repo.status === "error") {
         await commands.cloneRepo(repo.id);
       } else {
         await commands.updateRepo(repo.id);
       }
       toast({
         title: "Task queued",
-        description: `Update started for ${repo.owner}/${repo.name}`,
+        description: `${repo.status === "error" ? "Retry" : "Update"} started for ${repo.owner}/${repo.name}`,
       });
     } catch (err) {
       toast({
@@ -105,7 +105,11 @@ export function RowActions({ repo }: RowActionsProps) {
         <DropdownMenuContent align="end">
           <DropdownMenuItem onClick={handleUpdate}>
             <RefreshCw className="mr-2 h-4 w-4" />
-            {repo.status === "pending" ? "Clone Now" : "Update Now"}
+            {repo.status === "pending"
+              ? "Clone Now"
+              : repo.status === "error"
+                ? "Retry Clone"
+                : "Update Now"}
           </DropdownMenuItem>
           <DropdownMenuItem onClick={handleOpenOnGitHub}>
             <ExternalLink className="mr-2 h-4 w-4" />

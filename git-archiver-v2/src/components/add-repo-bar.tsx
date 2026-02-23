@@ -30,7 +30,7 @@ export function AddRepoBar() {
       await addRepo(trimmed);
       toast({
         title: "Repository added",
-        description: `Successfully added ${trimmed}`,
+        description: `Cloning ${trimmed} in the background...`,
       });
       setUrl("");
     } catch (err) {

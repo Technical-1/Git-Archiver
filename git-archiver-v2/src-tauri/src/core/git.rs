@@ -49,14 +49,41 @@ where
     Ok(())
 }
 
-/// Fetch from origin and compare local HEAD to the remote counterpart.
+/// Fetch from origin with optional progress reporting, then compare local HEAD
+/// to the remote counterpart.
 /// Returns `None` if up-to-date, or `Some((local_oid, remote_oid, head_refname))` if updates exist.
-fn fetch_and_compare(
+fn fetch_and_compare<F>(
     repo: &Repository,
-) -> Result<Option<(git2::Oid, git2::Oid, String)>, AppError> {
-    // Fetch from origin
+    progress_callback: Option<F>,
+) -> Result<Option<(git2::Oid, git2::Oid, String)>, AppError>
+where
+    F: Fn(f32, &str) -> bool,
+{
+    // Fetch from origin with progress reporting
     let mut remote = repo.find_remote("origin")?;
-    remote.fetch(&["refs/heads/*:refs/remotes/origin/*"], None, None)?;
+    let mut callbacks = RemoteCallbacks::new();
+
+    if let Some(cb) = progress_callback {
+        callbacks.transfer_progress(move |stats| {
+            let total = stats.total_objects() as f32;
+            let received = stats.received_objects() as f32;
+            let pct = if total > 0.0 { received / total } else { 0.0 };
+            let msg = format!(
+                "Fetching objects: {}/{}",
+                stats.received_objects(),
+                stats.total_objects()
+            );
+            cb(pct, &msg)
+        });
+    }
+
+    let mut fetch_opts = FetchOptions::new();
+    fetch_opts.remote_callbacks(callbacks);
+    remote.fetch(
+        &["refs/heads/*:refs/remotes/origin/*"],
+        Some(&mut fetch_opts),
+        None,
+    )?;
     remote.disconnect()?;
 
     // Compare local HEAD to its upstream (origin) counterpart
@@ -93,16 +120,26 @@ fn fetch_and_compare(
 /// Returns `true` if there are new commits to pull.
 pub fn fetch_and_check_updates(repo_path: &Path) -> Result<bool, AppError> {
     let repo = Repository::open(repo_path)?;
-    let result = fetch_and_compare(&repo)?;
+    let result = fetch_and_compare::<fn(f32, &str) -> bool>(&repo, None)?;
     Ok(result.is_some())
 }
 
-/// Pull latest changes from origin (fetch + fast-forward).
+/// Fetch from origin with progress reporting, then fast-forward if updates exist.
+///
+/// This combines fetch + compare + pull into a single operation to avoid
+/// a redundant double-fetch.
+///
+/// `progress_callback`: Optional callback receiving (progress_pct 0.0-1.0, message).
+/// Return `false` from the callback to cancel the operation.
+///
 /// Returns `true` if files were updated, `false` if already up-to-date.
-pub fn pull_repo(repo_path: &Path) -> Result<bool, AppError> {
+pub fn fetch_and_pull<F>(repo_path: &Path, progress_callback: Option<F>) -> Result<bool, AppError>
+where
+    F: Fn(f32, &str) -> bool,
+{
     let repo = Repository::open(repo_path)?;
 
-    let (_, remote_oid, refname) = match fetch_and_compare(&repo)? {
+    let (_, remote_oid, refname) = match fetch_and_compare(&repo, progress_callback)? {
         Some(result) => result,
         None => return Ok(false), // Already up to date
     };
@@ -128,6 +165,12 @@ pub fn pull_repo(repo_path: &Path) -> Result<bool, AppError> {
             "Cannot fast-forward: the local branch has diverged from origin.".to_string(),
         ))
     }
+}
+
+/// Pull latest changes from origin (fetch + fast-forward).
+/// Returns `true` if files were updated, `false` if already up-to-date.
+pub fn pull_repo(repo_path: &Path) -> Result<bool, AppError> {
+    fetch_and_pull::<fn(f32, &str) -> bool>(repo_path, None)
 }
 
 #[cfg(test)]

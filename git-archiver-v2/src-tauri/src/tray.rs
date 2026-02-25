@@ -1,5 +1,5 @@
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
-use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager};
 
 /// Set up the system tray icon with a context menu.
@@ -9,8 +9,7 @@ use tauri::{AppHandle, Manager};
 /// - Last sync: Never (disabled, updated by scheduler)
 /// - Quit (exits the app)
 ///
-/// Left-click on the tray icon reopens the window.
-/// Right-click shows the context menu.
+/// Left-click (or right-click) on the tray icon shows the context menu.
 pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let open_item = MenuItem::with_id(app, "open", "Open Git Archiver", true, None::<&str>)?;
     let last_sync_item =
@@ -32,21 +31,17 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         )
         .tooltip("Git Archiver")
         .menu(&menu)
-        .show_menu_on_left_click(false)
-        .on_menu_event(move |app, event| match event.id().as_ref() {
-            "open" => show_main_window(app),
-            "quit" => app.exit(0),
-            _ => {}
-        })
-        .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click {
-                button: MouseButton::Left,
-                button_state: MouseButtonState::Up,
-                ..
-            } = event
-            {
-                show_main_window(tray.app_handle());
+        .show_menu_on_left_click(true)
+        .on_menu_event(move |_app, event| match event.id().as_ref() {
+            "open" => show_main_window(_app),
+            "quit" => {
+                // Use std::process::exit directly because the RunEvent::ExitRequested
+                // handler in lib.rs unconditionally prevents exit (to keep the app alive
+                // when windows are closed). app.exit(0) triggers that handler and gets
+                // blocked, so we bypass it here for an explicit user-initiated quit.
+                std::process::exit(0);
             }
+            _ => {}
         })
         .build(app)?;
 

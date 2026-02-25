@@ -4,6 +4,8 @@ import type { TaskProgress, ActivityEntry } from "@/lib/types";
 
 describe("task-store", () => {
   beforeEach(() => {
+    // Clear persisted state to avoid test pollution
+    localStorage.removeItem("git-archiver-activity-log");
     useTaskStore.setState({
       activeTasks: new Map(),
       activityLog: [],
@@ -16,7 +18,7 @@ describe("task-store", () => {
     expect(state.activityLog).toEqual([]);
   });
 
-  it("addProgress adds a task", () => {
+  it("addProgress adds a task with normalized progress", () => {
     const progress: TaskProgress = {
       repo_url: "https://github.com/octocat/hello-world",
       stage: "cloning",
@@ -28,9 +30,13 @@ describe("task-store", () => {
 
     const state = useTaskStore.getState();
     expect(state.activeTasks.size).toBe(1);
-    expect(
-      state.activeTasks.get("https://github.com/octocat/hello-world"),
-    ).toEqual(progress);
+    const task = state.activeTasks.get(
+      "https://github.com/octocat/hello-world",
+    );
+    expect(task?.stage).toBe("cloning");
+    // Backend sends 0.0-1.0, store normalizes to 0-100
+    expect(task?.progress).toBe(50);
+    expect(task?.message).toBe("Cloning...");
   });
 
   it("addProgress updates an existing task", () => {

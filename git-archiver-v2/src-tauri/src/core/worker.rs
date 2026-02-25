@@ -1,9 +1,9 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use chrono::Utc;
 use rusqlite::Connection;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{mpsc, Mutex};
 
 use crate::core::archive;
@@ -14,6 +14,84 @@ use crate::core::task_manager::{Task, TaskManager};
 use crate::db;
 use crate::error::AppError;
 use crate::models::{RepoStatus, TaskProgress, TaskStage};
+
+/// Resolve a data_dir to an absolute path. If the stored data_dir is relative,
+/// it is resolved against the app's data directory.
+fn resolve_data_dir(app_handle: &AppHandle, data_dir: &str) -> PathBuf {
+    let path = PathBuf::from(data_dir);
+    if path.is_relative() {
+        if let Ok(app_data) = app_handle.path().app_data_dir() {
+            return app_data.join(data_dir);
+        }
+    }
+    path
+}
+
+/// Remove working tree files from a cloned repo, keeping only `.git/` (for
+/// future fetch/pull) and `versions/` (the compressed archives).
+///
+/// This prevents the data folder from storing raw source code alongside the
+/// archives, roughly halving disk usage per repository.
+fn clean_working_tree(repo_dir: &Path) {
+    for entry in match std::fs::read_dir(repo_dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            log::warn!("Failed to read dir {} for cleanup: {}", repo_dir.display(), e);
+            return;
+        }
+    } {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+
+        // Keep git metadata and archive versions
+        if name_str == ".git" || name_str == "versions" {
+            continue;
+        }
+
+        let path = entry.path();
+        let result = if path.is_dir() {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        };
+
+        if let Err(e) = result {
+            log::warn!("Failed to remove {}: {}", path.display(), e);
+        }
+    }
+}
+
+/// README filenames to search for, in priority order.
+const README_CANDIDATES: &[&str] = &[
+    "README.md",
+    "readme.md",
+    "Readme.md",
+    "README.rst",
+    "README.txt",
+    "README",
+];
+
+/// Read the README file from a directory, trying common filenames in order.
+/// Returns None if no README is found or if reading fails.
+fn read_readme_from_dir(dir: &Path) -> Option<String> {
+    for candidate in README_CANDIDATES {
+        let path = dir.join(candidate);
+        if path.is_file() {
+            match std::fs::read_to_string(&path) {
+                Ok(content) => return Some(content),
+                Err(e) => {
+                    log::warn!("Failed to read {}: {}", path.display(), e);
+                    return None;
+                }
+            }
+        }
+    }
+    None
+}
 
 /// Main worker loop that processes tasks from the channel.
 ///
@@ -68,10 +146,10 @@ async fn process_task(
 ) {
     match task {
         Task::Clone(id) => {
-            handle_clone(id, app_handle, db, task_manager).await;
+            handle_clone(id, app_handle, db, github_client, task_manager).await;
         }
         Task::Update(id) => {
-            handle_update(id, app_handle, db, task_manager).await;
+            handle_update(id, app_handle, db, github_client, task_manager).await;
         }
         Task::UpdateAll { include_archived } => {
             handle_update_all(include_archived, db, task_manager).await;
@@ -85,6 +163,29 @@ async fn process_task(
     }
 }
 
+/// Emit a task-complete event so the frontend can remove the task from the UI.
+fn emit_task_complete(app_handle: &AppHandle, repo_url: &str) {
+    let _ = app_handle.emit("task-complete", repo_url);
+}
+
+/// Payload for task-error events emitted to the frontend.
+#[derive(Debug, Clone, serde::Serialize)]
+struct TaskErrorPayload {
+    repo_url: String,
+    message: String,
+}
+
+/// Emit a task-error event so the frontend can log the failure.
+fn emit_task_error(app_handle: &AppHandle, repo_url: &str, message: &str) {
+    let _ = app_handle.emit(
+        "task-error",
+        &TaskErrorPayload {
+            repo_url: repo_url.to_string(),
+            message: message.to_string(),
+        },
+    );
+}
+
 /// Handle cloning a repository.
 ///
 /// 1. Load repo from DB
@@ -96,10 +197,20 @@ async fn handle_clone(
     repo_id: i64,
     app_handle: &AppHandle,
     db: &Arc<Mutex<Connection>>,
+    github_client: &Arc<GitHubClient>,
     task_manager: &Arc<TaskManager>,
 ) {
-    let result = handle_clone_inner(repo_id, app_handle, db, task_manager).await;
-    if let Err(e) = result {
+    // Get repo URL before running so we can emit task-complete even on error
+    let repo_url = {
+        let db = db.lock().await;
+        db::repos::get_repo_by_id(&db, repo_id)
+            .ok()
+            .flatten()
+            .map(|r| r.url)
+    };
+
+    let result = handle_clone_inner(repo_id, app_handle, db, github_client, task_manager).await;
+    if let Err(e) = &result {
         log::error!("Clone task failed for repo {}: {}", repo_id, e);
         // Update repo status to error
         let db = db.lock().await;
@@ -110,6 +221,12 @@ async fn handle_clone(
             Some(&format!("{}", e)),
         );
     }
+    if let Some(url) = &repo_url {
+        if let Err(e) = &result {
+            emit_task_error(app_handle, url, &format!("{}", e));
+        }
+        emit_task_complete(app_handle, url);
+    }
     task_manager.mark_complete(repo_id);
 }
 
@@ -117,6 +234,7 @@ async fn handle_clone_inner(
     repo_id: i64,
     app_handle: &AppHandle,
     db: &Arc<Mutex<Connection>>,
+    github_client: &Arc<GitHubClient>,
     task_manager: &Arc<TaskManager>,
 ) -> Result<(), AppError> {
     // Load repo from DB
@@ -125,7 +243,8 @@ async fn handle_clone_inner(
         let repo = db::repos::get_repo_by_id(&db, repo_id)?
             .ok_or_else(|| AppError::UserVisible(format!("Repository {} not found.", repo_id)))?;
         let settings = db::settings::get_app_settings(&db)?;
-        (repo, settings.data_dir)
+        let resolved_dir = resolve_data_dir(app_handle, &settings.data_dir);
+        (repo, resolved_dir)
     };
 
     // Check cancellation
@@ -147,7 +266,7 @@ async fn handle_clone_inner(
     );
 
     // Determine clone path: {data_dir}/{owner}/{name}.git
-    let clone_path = PathBuf::from(&data_dir)
+    let clone_path = data_dir
         .join(&repo.owner)
         .join(format!("{}.git", &repo.name));
 
@@ -156,38 +275,76 @@ async fn handle_clone_inner(
         std::fs::create_dir_all(parent)?;
     }
 
-    // Clone the repository (blocking git2 operation) with progress reporting
-    let url = repo.url.clone();
-    let dest = clone_path.clone();
-    let clone_app = app_handle.clone();
-    let clone_repo_url = repo.url.clone();
-    let cancel_token = task_manager.get_cancellation_token(repo_id);
-    tokio::task::spawn_blocking(move || {
-        git::clone_repo(
-            &url,
-            &dest,
-            Some(move |pct: f32, msg: &str| -> bool {
-                // Check cancellation
-                if let Some(ref token) = cancel_token {
-                    if token.is_cancelled() {
-                        return false;
+    // If the clone path already contains a valid git repo (e.g., from a previous
+    // delete-without-removing-files), reuse it instead of failing.
+    let already_cloned =
+        clone_path.join(".git").exists() || clone_path.join("HEAD").exists();
+
+    if already_cloned {
+        log::info!(
+            "Reusing existing clone at {} for {}/{}",
+            clone_path.display(),
+            repo.owner,
+            repo.name
+        );
+    } else {
+        // Clone the repository (blocking git2 operation) with progress reporting
+        let url = repo.url.clone();
+        let dest = clone_path.clone();
+        let clone_app = app_handle.clone();
+        let clone_repo_url = repo.url.clone();
+        let cancel_token = task_manager.get_cancellation_token(repo_id);
+        tokio::task::spawn_blocking(move || {
+            git::clone_repo(
+                &url,
+                &dest,
+                Some(move |pct: f32, msg: &str| -> bool {
+                    // Check cancellation
+                    if let Some(ref token) = cancel_token {
+                        if token.is_cancelled() {
+                            return false;
+                        }
                     }
-                }
-                let _ = clone_app.emit(
-                    "task-progress",
-                    &TaskProgress {
-                        repo_url: clone_repo_url.clone(),
-                        stage: TaskStage::Cloning,
-                        progress: Some(pct as f64),
-                        message: Some(msg.to_string()),
-                    },
-                );
-                true
-            }),
-        )
-    })
-    .await
-    .map_err(|e| AppError::Custom(format!("Clone task panicked: {}", e)))??;
+                    let _ = clone_app.emit(
+                        "task-progress",
+                        &TaskProgress {
+                            repo_url: clone_repo_url.clone(),
+                            stage: TaskStage::Cloning,
+                            progress: Some(pct as f64),
+                            message: Some(msg.to_string()),
+                        },
+                    );
+                    true
+                }),
+            )
+        })
+        .await
+        .map_err(|e| AppError::Custom(format!("Clone task panicked: {}", e)))??;
+    }
+
+    // Fetch repo description from GitHub (non-fatal)
+    match github_client
+        .get_repo_info(&repo.owner, &repo.name)
+        .await
+    {
+        Ok(info) => {
+            let db = db.lock().await;
+            let _ = db::repos::update_repo_metadata(
+                &db,
+                repo_id,
+                info.description.as_deref(),
+                info.is_private,
+            );
+        }
+        Err(e) => {
+            log::warn!(
+                "Failed to fetch description for {}/{}: {}",
+                repo.owner,
+                repo.name,
+                e
+            );
+        }
+    }
 
     // Check cancellation before archiving
     if let Some(token) = task_manager.get_cancellation_token(repo_id) {
@@ -237,6 +394,9 @@ async fn handle_clone_inner(
     .await
     .map_err(|e| AppError::Custom(format!("Archive task panicked: {}", e)))??;
 
+    // Read README content from the cloned repo (best-effort)
+    let readme_content = read_readme_from_dir(&clone_path);
+
     // Compute file hashes for future incremental detection
     let hash_dir = clone_path.clone();
     let hashes = tokio::task::spawn_blocking(move || hasher::hash_directory(&hash_dir))
@@ -262,6 +422,7 @@ async fn handle_clone_inner(
             archive_info.size_bytes,
             archive_info.file_count,
             false,
+            readme_content.as_deref(),
         )?;
 
         // Store file hashes
@@ -274,6 +435,9 @@ async fn handle_clone_inner(
             let _ = app_handle.emit("repo-updated", &updated_repo);
         }
     }
+
+    // Clean up working tree — keep only .git/ and versions/
+    clean_working_tree(&clone_path);
 
     // Emit progress: complete
     let _ = app_handle.emit(
@@ -299,10 +463,20 @@ async fn handle_update(
     repo_id: i64,
     app_handle: &AppHandle,
     db: &Arc<Mutex<Connection>>,
+    github_client: &Arc<GitHubClient>,
     task_manager: &Arc<TaskManager>,
 ) {
-    let result = handle_update_inner(repo_id, app_handle, db, task_manager).await;
-    if let Err(e) = result {
+    // Get repo URL before running so we can emit task-complete even on error
+    let repo_url = {
+        let db = db.lock().await;
+        db::repos::get_repo_by_id(&db, repo_id)
+            .ok()
+            .flatten()
+            .map(|r| r.url)
+    };
+
+    let result = handle_update_inner(repo_id, app_handle, db, github_client, task_manager).await;
+    if let Err(e) = &result {
         log::error!("Update task failed for repo {}: {}", repo_id, e);
         let db = db.lock().await;
         let _ = db::repos::update_repo_status(
@@ -312,6 +486,12 @@ async fn handle_update(
             Some(&format!("{}", e)),
         );
     }
+    if let Some(url) = &repo_url {
+        if let Err(e) = &result {
+            emit_task_error(app_handle, url, &format!("{}", e));
+        }
+        emit_task_complete(app_handle, url);
+    }
     task_manager.mark_complete(repo_id);
 }
 
@@ -319,6 +499,7 @@ async fn handle_update_inner(
     repo_id: i64,
     app_handle: &AppHandle,
     db: &Arc<Mutex<Connection>>,
+    github_client: &Arc<GitHubClient>,
     task_manager: &Arc<TaskManager>,
 ) -> Result<(), AppError> {
     // Load repo from DB
@@ -364,18 +545,75 @@ async fn handle_update_inner(
         },
     );
 
-    // Fetch and check for updates
-    let check_path = repo_path.clone();
-    let has_updates =
-        tokio::task::spawn_blocking(move || git::fetch_and_check_updates(&check_path))
-            .await
-            .map_err(|e| AppError::Custom(format!("Fetch check panicked: {}", e)))??;
+    // Fetch + pull in one pass (avoids redundant double-fetch) with progress reporting
+    let pull_path = repo_path.clone();
+    let pull_app = app_handle.clone();
+    let pull_repo_url = repo.url.clone();
+    let pull_owner = repo.owner.clone();
+    let pull_name = repo.name.clone();
+    let cancel_token = task_manager.get_cancellation_token(repo_id);
+    let has_updates = tokio::task::spawn_blocking(move || {
+        git::fetch_and_pull(
+            &pull_path,
+            Some(move |pct: f32, msg: &str| -> bool {
+                // Check cancellation
+                if let Some(ref token) = cancel_token {
+                    if token.is_cancelled() {
+                        return false;
+                    }
+                }
+                let _ = pull_app.emit(
+                    "task-progress",
+                    &TaskProgress {
+                        repo_url: pull_repo_url.clone(),
+                        stage: TaskStage::Pulling,
+                        progress: Some(pct as f64),
+                        message: Some(format!("Pulling {}/{}: {}", pull_owner, pull_name, msg)),
+                    },
+                );
+                true
+            }),
+        )
+    })
+    .await
+    .map_err(|e| AppError::Custom(format!("Pull task panicked: {}", e)))??;
+
+    // Refresh repo description from GitHub (non-fatal, runs regardless of updates)
+    match github_client
+        .get_repo_info(&repo.owner, &repo.name)
+        .await
+    {
+        Ok(info) => {
+            let db = db.lock().await;
+            let _ = db::repos::update_repo_metadata(
+                &db,
+                repo_id,
+                info.description.as_deref(),
+                info.is_private,
+            );
+        }
+        Err(e) => {
+            log::warn!(
+                "Failed to refresh description for {}/{}: {}",
+                repo.owner,
+                repo.name,
+                e
+            );
+        }
+    }
 
     if !has_updates {
         // Update last_checked timestamp
         let now = Utc::now();
-        let db = db.lock().await;
-        db::repos::update_repo_timestamps(&db, repo_id, None, None, Some(now))?;
+        {
+            let db = db.lock().await;
+            db::repos::update_repo_timestamps(&db, repo_id, None, None, Some(now))?;
+
+            // Emit repo-updated so the frontend gets the refreshed description
+            if let Some(updated_repo) = db::repos::get_repo_by_id(&db, repo_id)? {
+                let _ = app_handle.emit("repo-updated", &updated_repo);
+            }
+        }
 
         let _ = app_handle.emit(
             "task-progress",
@@ -392,18 +630,19 @@ async fn handle_update_inner(
         return Ok(());
     }
 
-    // Check cancellation before pull
-    if let Some(token) = task_manager.get_cancellation_token(repo_id) {
-        if token.is_cancelled() {
-            return Ok(());
-        }
-    }
-
-    // Pull updates
-    let pull_path = repo_path.clone();
-    tokio::task::spawn_blocking(move || git::pull_repo(&pull_path))
-        .await
-        .map_err(|e| AppError::Custom(format!("Pull task panicked: {}", e)))??;
+    // Transition to compressing stage while hashing
+    let _ = app_handle.emit(
+        "task-progress",
+        &TaskProgress {
+            repo_url: repo.url.clone(),
+            stage: TaskStage::Compressing,
+            progress: Some(0.0),
+            message: Some(format!(
+                "Computing file hashes for {}/{}...",
+                repo.owner, repo.name
+            )),
+        },
+    );
 
     // Get old file hashes and compute new ones to detect changes
     let old_hashes = {
@@ -470,6 +709,9 @@ async fn handle_update_inner(
     .await
     .map_err(|e| AppError::Custom(format!("Archive task panicked: {}", e)))??;
 
+    // Read README content from the repo (best-effort)
+    let readme_content = read_readme_from_dir(&repo_path);
+
     // Update DB
     let now = Utc::now();
     {
@@ -485,6 +727,7 @@ async fn handle_update_inner(
             archive_info.size_bytes,
             archive_info.file_count,
             is_incremental,
+            readme_content.as_deref(),
         )?;
 
         // Update file hashes
@@ -497,6 +740,9 @@ async fn handle_update_inner(
             let _ = app_handle.emit("repo-updated", &updated_repo);
         }
     }
+
+    // Clean up working tree — keep only .git/ and versions/
+    clean_working_tree(&repo_path);
 
     // Emit progress: complete
     let _ = app_handle.emit(

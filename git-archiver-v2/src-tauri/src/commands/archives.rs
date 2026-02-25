@@ -48,6 +48,26 @@ pub async fn extract_archive(
     Ok(())
 }
 
+/// Get the README content for a specific archive.
+#[tauri::command]
+pub async fn get_archive_readme(
+    archive_id: i64,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, AppError> {
+    let db = state.db.lock().await;
+    db::archives::get_archive_readme(&db, archive_id)
+}
+
+/// Get the README content from the latest archive for a repository.
+#[tauri::command]
+pub async fn get_repo_readme(
+    repo_id: i64,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, AppError> {
+    let db = state.db.lock().await;
+    db::archives::get_latest_readme(&db, repo_id)
+}
+
 /// Delete an archive: remove the file from disk and the record from the database.
 #[tauri::command]
 pub async fn delete_archive(archive_id: i64, state: State<'_, AppState>) -> Result<(), AppError> {

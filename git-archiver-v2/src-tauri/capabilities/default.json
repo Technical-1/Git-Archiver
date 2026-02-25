@@ -12,6 +12,7 @@
         {"url": "https://api.github.com/*"}
       ]
     },
-    "notification:default"
+    "notification:default",
+    "dialog:default"
   ]
 }

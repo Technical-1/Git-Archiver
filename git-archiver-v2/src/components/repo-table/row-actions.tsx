@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   MoreHorizontal,
   RefreshCw,
@@ -35,6 +36,7 @@ interface RowActionsProps {
 
 export function RowActions({ repo }: RowActionsProps) {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [removeFiles, setRemoveFiles] = useState(false);
   const [archiveViewerOpen, setArchiveViewerOpen] = useState(false);
   const deleteRepo = useRepoStore((s) => s.deleteRepo);
 
@@ -59,8 +61,16 @@ export function RowActions({ repo }: RowActionsProps) {
     }
   };
 
-  const handleOpenOnGitHub = () => {
-    window.open(repo.url, "_blank");
+  const handleOpenOnGitHub = async () => {
+    try {
+      await openUrl(repo.url);
+    } catch {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Failed to open URL in browser",
+      });
+    }
   };
 
   const handleCopyUrl = async () => {
@@ -74,10 +84,12 @@ export function RowActions({ repo }: RowActionsProps) {
   const handleDelete = async () => {
     if (repo.id === null) return;
     try {
-      await deleteRepo(repo.id, false);
+      await deleteRepo(repo.id, removeFiles);
       toast({
         title: "Deleted",
-        description: `Removed ${repo.owner}/${repo.name}`,
+        description: removeFiles
+          ? `Removed ${repo.owner}/${repo.name} and all local files`
+          : `Removed ${repo.owner}/${repo.name} from tracking`,
       });
     } catch (err) {
       toast({
@@ -87,6 +99,7 @@ export function RowActions({ repo }: RowActionsProps) {
       });
     }
     setDeleteDialogOpen(false);
+    setRemoveFiles(false);
   };
 
   return (
@@ -134,7 +147,10 @@ export function RowActions({ repo }: RowActionsProps) {
         </DropdownMenuContent>
       </DropdownMenu>
 
-      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+      <Dialog open={deleteDialogOpen} onOpenChange={(open) => {
+        setDeleteDialogOpen(open);
+        if (!open) setRemoveFiles(false);
+      }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Delete Repository</DialogTitle>
@@ -143,9 +159,18 @@ export function RowActions({ repo }: RowActionsProps) {
               <span className="font-medium">
                 {repo.owner}/{repo.name}
               </span>{" "}
-              from tracking? This will not delete any archived files.
+              from tracking?
             </DialogDescription>
           </DialogHeader>
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input
+              type="checkbox"
+              checked={removeFiles}
+              onChange={(e) => setRemoveFiles(e.target.checked)}
+              className="rounded border-input"
+            />
+            Also delete cloned files and archives from disk
+          </label>
           <DialogFooter>
             <Button
               variant="outline"

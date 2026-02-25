@@ -84,10 +84,10 @@ describe("SettingsDialog", () => {
     expect(screen.getByLabelText("Sync at")).toBeInTheDocument();
   });
 
-  it("shows data path as read-only", () => {
+  it("shows editable data path input", () => {
     render(<SettingsDialog open={true} onOpenChange={() => {}} />);
     const dataInput = screen.getByDisplayValue("data");
-    expect(dataInput).toBeDisabled();
+    expect(dataInput).toBeEnabled();
   });
 
   it("calls saveSettings and closes on save", async () => {

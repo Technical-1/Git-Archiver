@@ -3,6 +3,7 @@ use rusqlite::Connection;
 use crate::error::AppError;
 
 const MIGRATION_001: &str = include_str!("../../migrations/001_initial.sql");
+const MIGRATION_002: &str = include_str!("../../migrations/002_add_readme_content.sql");
 
 pub fn run_migrations(conn: &Connection) -> Result<(), AppError> {
     // Create schema_version table if not exists
@@ -23,6 +24,11 @@ pub fn run_migrations(conn: &Connection) -> Result<(), AppError> {
     if current_version < 1 {
         conn.execute_batch(MIGRATION_001)?;
         conn.execute("INSERT INTO schema_version (version) VALUES (1)", [])?;
+    }
+
+    if current_version < 2 {
+        conn.execute_batch(MIGRATION_002)?;
+        conn.execute("INSERT INTO schema_version (version) VALUES (2)", [])?;
     }
 
     Ok(())
@@ -79,7 +85,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(version, 1);
+        assert_eq!(version, 2);
     }
 
     #[test]

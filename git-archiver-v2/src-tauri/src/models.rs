@@ -51,6 +51,7 @@ pub struct Archive {
     pub file_count: u32,
     pub is_incremental: bool,
     pub commit_hash: Option<String>,
+    pub readme_content: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 

@@ -48,6 +48,18 @@ export async function listArchives(repoId: number): Promise<ArchiveView[]> {
   return invoke("list_archives", { repoId });
 }
 
+export async function getArchiveReadme(
+  archiveId: number,
+): Promise<string | null> {
+  return invoke("get_archive_readme", { archiveId });
+}
+
+export async function getRepoReadme(
+  repoId: number,
+): Promise<string | null> {
+  return invoke("get_repo_readme", { repoId });
+}
+
 export async function extractArchive(
   archiveId: number,
   destDir: string,

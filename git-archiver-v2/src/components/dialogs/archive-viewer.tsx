@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
-import { Download, Trash2 } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import { Download, Trash2, FileText, X } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -42,6 +43,8 @@ export function ArchiveViewer({ repo, open, onOpenChange }: ArchiveViewerProps) 
   const [archives, setArchives] = useState<ArchiveView[]>([]);
   const [loading, setLoading] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
+  const [readmeContent, setReadmeContent] = useState<string | null>(null);
+  const [readmeLoading, setReadmeLoading] = useState(false);
 
   const fetchArchives = useCallback(async () => {
     if (repo.id === null) return;
@@ -63,8 +66,25 @@ export function ArchiveViewer({ repo, open, onOpenChange }: ArchiveViewerProps) 
   useEffect(() => {
     if (open) {
       fetchArchives();
+      setReadmeContent(null);
     }
   }, [open, fetchArchives]);
+
+  const handleViewReadme = async (archiveId: number) => {
+    setReadmeLoading(true);
+    try {
+      const content = await commands.getArchiveReadme(archiveId);
+      setReadmeContent(content);
+    } catch (err) {
+      toast({
+        variant: "destructive",
+        title: "Failed to load README",
+        description: String(err),
+      });
+    } finally {
+      setReadmeLoading(false);
+    }
+  };
 
   const handleExtract = async (archiveId: number) => {
     // In Tauri, we would use a file dialog to pick a destination.
@@ -187,6 +207,16 @@ export function ArchiveViewer({ repo, open, onOpenChange }: ArchiveViewerProps) 
                             variant="ghost"
                             size="icon"
                             className="h-7 w-7"
+                            onClick={() => handleViewReadme(archive.id!)}
+                            aria-label="View README"
+                            disabled={readmeLoading}
+                          >
+                            <FileText className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7"
                             onClick={() => handleExtract(archive.id!)}
                             aria-label="Extract archive"
                           >
@@ -210,6 +240,33 @@ export function ArchiveViewer({ repo, open, onOpenChange }: ArchiveViewerProps) 
             </Table>
           )}
         </div>
+        {readmeContent !== null && (
+          <div className="border-t pt-3 mt-3">
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="text-sm font-medium">README</h4>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6"
+                onClick={() => setReadmeContent(null)}
+                aria-label="Close README"
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+            <div className="max-h-60 overflow-y-auto rounded-md bg-muted p-3 prose prose-sm dark:prose-invert max-w-none">
+              <ReactMarkdown>{readmeContent}</ReactMarkdown>
+            </div>
+          </div>
+        )}
+
+        {readmeContent === null && readmeLoading && (
+          <div className="border-t pt-3 mt-3">
+            <p className="text-sm text-muted-foreground text-center py-4">
+              Loading README...
+            </p>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );

@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, FolderOpen } from "lucide-react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   Dialog,
   DialogContent,
@@ -28,6 +29,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const [token, setToken] = useState("");
   const [showToken, setShowToken] = useState(false);
   const [maxConcurrent, setMaxConcurrent] = useState(4);
+  const [dataDir, setDataDir] = useState("");
   const [syncEnabled, setSyncEnabled] = useState(false);
   const [syncTime, setSyncTime] = useState("05:00");
   const [rateLimit, setRateLimit] = useState<RateLimitInfo | null>(null);
@@ -40,6 +42,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
       setToken("");
       setShowToken(false);
       setMaxConcurrent(settings.max_concurrent_tasks);
+      setDataDir(settings.data_dir);
       setSyncEnabled(settings.sync_time !== null);
       setSyncTime(settings.sync_time ?? "05:00");
       setRateLimit(null);
@@ -72,6 +75,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
     try {
       const updatedSettings = {
         ...settings,
+        data_dir: dataDir,
         max_concurrent_tasks: maxConcurrent,
         sync_time: syncEnabled ? syncTime : null,
       };
@@ -204,10 +208,35 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
 
           {/* Data Path */}
           <div className="space-y-2">
-            <label className="text-sm font-medium">Data Path</label>
-            <Input value={settings.data_dir} disabled className="bg-muted" />
+            <label className="text-sm font-medium" htmlFor="data-dir">
+              Data Path
+            </label>
+            <div className="flex items-center gap-2">
+              <Input
+                id="data-dir"
+                value={dataDir}
+                onChange={(e) => setDataDir(e.target.value)}
+                className="flex-1"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={async () => {
+                  const selected = await openDialog({
+                    directory: true,
+                    defaultPath: dataDir || undefined,
+                    title: "Select data directory",
+                  });
+                  if (selected) setDataDir(selected);
+                }}
+                aria-label="Browse folder"
+              >
+                <FolderOpen className="h-4 w-4" />
+              </Button>
+            </div>
             <p className="text-xs text-muted-foreground">
-              Read-only. Change via configuration file.
+              Where cloned repos and archives are stored. Existing data is not moved automatically.
             </p>
           </div>
         </div>

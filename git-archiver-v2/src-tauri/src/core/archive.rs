@@ -34,7 +34,7 @@ where
     }
 
     let file = fs::File::create(archive_path)?;
-    let encoder = XzEncoder::new(file, 6);
+    let encoder = XzEncoder::new(file, 1);
     let mut builder = Builder::new(encoder);
     let mut file_count: u32 = 0;
 

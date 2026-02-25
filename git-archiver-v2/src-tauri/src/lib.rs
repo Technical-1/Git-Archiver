@@ -32,6 +32,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // --- Initialize database ---
             let app_data_dir = app.path().app_data_dir().map_err(|e| {
@@ -150,12 +151,12 @@ pub fn run() {
             commands::archives::list_archives,
             commands::archives::extract_archive,
             commands::archives::delete_archive,
+            commands::archives::get_archive_readme,
+            commands::archives::get_repo_readme,
             // Settings commands
             commands::settings::get_settings,
             commands::settings::save_settings,
             commands::settings::check_rate_limit,
-            // Migration commands
-            commands::migrate::migrate_from_json,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

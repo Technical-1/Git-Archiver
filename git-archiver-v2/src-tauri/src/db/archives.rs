@@ -9,7 +9,8 @@ use crate::models::Archive;
 /// Map a rusqlite Row to an Archive struct.
 ///
 /// Expected column order:
-///   0: id, 1: repo_id, 2: file_path, 3: size_bytes, 4: file_count, 5: is_incremental, 6: created_at
+///   0: id, 1: repo_id, 2: file_path, 3: size_bytes, 4: file_count,
+///   5: is_incremental, 6: readme_content, 7: created_at
 fn row_to_archive(row: &Row) -> Result<Archive, rusqlite::Error> {
     let id: i64 = row.get(0)?;
     let repo_id: i64 = row.get(1)?;
@@ -17,7 +18,8 @@ fn row_to_archive(row: &Row) -> Result<Archive, rusqlite::Error> {
     let size_bytes: i64 = row.get(3)?;
     let file_count: i64 = row.get(4)?;
     let is_incremental: bool = row.get(5)?;
-    let created_at_str: String = row.get(6)?;
+    let readme_content: Option<String> = row.get(6)?;
+    let created_at_str: String = row.get(7)?;
 
     let created_at = match created_at_str.parse::<DateTime<Utc>>() {
         Ok(dt) => dt,
@@ -39,14 +41,16 @@ fn row_to_archive(row: &Row) -> Result<Archive, rusqlite::Error> {
         file_count: u32::try_from(file_count).unwrap_or(0),
         is_incremental,
         commit_hash: None,
+        readme_content,
         created_at,
     })
 }
 
 const SELECT_COLS: &str =
-    "id, repo_id, file_path, size_bytes, file_count, is_incremental, created_at";
+    "id, repo_id, file_path, size_bytes, file_count, is_incremental, readme_content, created_at";
 
 /// Insert a new archive record.
+#[allow(clippy::too_many_arguments)]
 pub fn insert_archive(
     conn: &Connection,
     repo_id: i64,
@@ -55,15 +59,26 @@ pub fn insert_archive(
     size_bytes: u64,
     file_count: u32,
     is_incremental: bool,
+    readme_content: Option<&str>,
 ) -> Result<Archive, AppError> {
     conn.execute(
-        "INSERT INTO archives (repo_id, filename, file_path, size_bytes, file_count, is_incremental) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![repo_id, filename, file_path, size_bytes as i64, file_count as i64, is_incremental],
+        "INSERT INTO archives (repo_id, filename, file_path, size_bytes, file_count, is_incremental, readme_content) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![repo_id, filename, file_path, size_bytes as i64, file_count as i64, is_incremental, readme_content],
     )?;
 
     let id = conn.last_insert_rowid();
     get_archive_by_id(conn, id)?
         .ok_or_else(|| AppError::Custom("Failed to retrieve inserted archive".to_string()))
+}
+
+/// Get the README content for a specific archive.
+pub fn get_archive_readme(conn: &Connection, id: i64) -> Result<Option<String>, AppError> {
+    let mut stmt = conn.prepare("SELECT readme_content FROM archives WHERE id = ?1")?;
+    let mut rows = stmt.query_map(params![id], |row| row.get::<_, Option<String>>(0))?;
+    match rows.next() {
+        Some(r) => Ok(r?),
+        None => Ok(None),
+    }
 }
 
 /// List all archives for a given repository, ordered by creation time descending.
@@ -86,6 +101,18 @@ pub fn get_archive_by_id(conn: &Connection, id: i64) -> Result<Option<Archive>, 
     let mut rows = stmt.query_map(params![id], row_to_archive)?;
     match rows.next() {
         Some(r) => Ok(Some(r?)),
+        None => Ok(None),
+    }
+}
+
+/// Get the README content from the latest archive for a given repo.
+pub fn get_latest_readme(conn: &Connection, repo_id: i64) -> Result<Option<String>, AppError> {
+    let mut stmt = conn.prepare(
+        "SELECT readme_content FROM archives WHERE repo_id = ?1 AND readme_content IS NOT NULL ORDER BY created_at DESC LIMIT 1",
+    )?;
+    let mut rows = stmt.query_map(params![repo_id], |row| row.get::<_, Option<String>>(0))?;
+    match rows.next() {
+        Some(r) => Ok(r?),
         None => Ok(None),
     }
 }
@@ -127,6 +154,7 @@ mod tests {
             1024,
             42,
             false,
+            None,
         )
         .unwrap();
 
@@ -157,6 +185,7 @@ mod tests {
             100,
             10,
             false,
+            None,
         )
         .unwrap();
         insert_archive(
@@ -167,6 +196,7 @@ mod tests {
             200,
             20,
             true,
+            None,
         )
         .unwrap();
         insert_archive(
@@ -177,6 +207,7 @@ mod tests {
             300,
             30,
             false,
+            None,
         )
         .unwrap();
 
@@ -196,7 +227,7 @@ mod tests {
         let repo_id = insert_test_repo(&conn);
 
         let archive =
-            insert_archive(&conn, repo_id, "a.tar.xz", "/path/a.tar.xz", 100, 10, false).unwrap();
+            insert_archive(&conn, repo_id, "a.tar.xz", "/path/a.tar.xz", 100, 10, false, None).unwrap();
         let archive_id = archive.id.unwrap();
 
         delete_archive(&conn, archive_id).unwrap();
@@ -210,7 +241,7 @@ mod tests {
         let repo_id = insert_test_repo(&conn);
 
         let archive =
-            insert_archive(&conn, repo_id, "a.tar.xz", "/path/a.tar.xz", 100, 10, false).unwrap();
+            insert_archive(&conn, repo_id, "a.tar.xz", "/path/a.tar.xz", 100, 10, false, None).unwrap();
         let archive_id = archive.id.unwrap();
 
         // Delete the repo -- should cascade to archives

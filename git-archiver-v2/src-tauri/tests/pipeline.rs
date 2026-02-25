@@ -187,6 +187,7 @@ fn test_full_clone_pipeline() {
         archive_info.size_bytes,
         archive_info.file_count,
         false,
+        None,
     )
     .unwrap();
 
@@ -282,6 +283,7 @@ fn test_update_with_incremental_archive() {
         archive_info.size_bytes,
         archive_info.file_count,
         true,
+        None,
     )
     .unwrap();
 
@@ -387,6 +389,7 @@ fn test_full_db_lifecycle() {
         1024,
         10,
         false,
+        None,
     )
     .unwrap();
     let repo_archives = archives::list_archives(&conn, repo_id).unwrap();

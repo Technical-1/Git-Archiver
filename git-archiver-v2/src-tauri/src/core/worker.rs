@@ -852,23 +852,29 @@ async fn handle_refresh_statuses(
 
     // Update each repo's status in the DB
     let db = db.lock().await;
-    for (i, (_owner, _name, new_status)) in statuses.iter().enumerate() {
-        if i < repos.len() {
-            if let Some(id) = repos[i].id {
-                if repos[i].status != *new_status {
-                    let _ = db::repos::update_repo_status(&db, id, new_status, None);
+    for (i, (_owner, _name, new_status_opt)) in statuses.iter().enumerate() {
+        if i >= repos.len() {
+            continue;
+        }
+        let Some(id) = repos[i].id else { continue };
 
-                    // Emit repo-updated event
-                    if let Ok(Some(updated_repo)) = db::repos::get_repo_by_id(&db, id) {
-                        let _ = app_handle.emit("repo-updated", &updated_repo);
-                    }
+        if let Some(new_status) = new_status_opt {
+            if repos[i].status != *new_status {
+                let _ = db::repos::update_repo_status(&db, id, new_status, None);
+
+                if let Ok(Some(updated_repo)) = db::repos::get_repo_by_id(&db, id) {
+                    let _ = app_handle.emit("repo-updated", &updated_repo);
                 }
-
-                // Update last_checked timestamp
-                let now = Utc::now();
-                let _ = db::repos::update_repo_timestamps(&db, id, None, None, Some(now));
             }
         }
+        // else: unknown — leave status unchanged
+
+        // We update last_checked even on unknown so we don't immediately
+        // re-request the same rate-limited/erroring repo on the next refresh
+        // cycle. The status field tells the user what we know; last_checked
+        // tells the worker when to next attempt.
+        let now = Utc::now();
+        let _ = db::repos::update_repo_timestamps(&db, id, None, None, Some(now));
     }
 
     // Emit progress: complete

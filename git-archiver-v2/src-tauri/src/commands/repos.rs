@@ -95,12 +95,22 @@ pub async fn delete_repo(
     remove_files: bool,
     state: State<'_, AppState>,
 ) -> Result<(), AppError> {
-    // Cancel any active task for this repo
-    state.task_manager.cancel(id).await;
+    // Cancel any active task and wait briefly for the worker to acknowledge
+    // so we don't race with in-flight file writes or archive inserts.
+    let acknowledged = state
+        .task_manager
+        .cancel_and_wait(id, std::time::Duration::from_secs(5))
+        .await;
+    if !acknowledged {
+        log::warn!(
+            "Task for repo {} did not acknowledge cancellation within 5s; \
+             proceeding with deletion (in-flight writes may produce orphan files).",
+            id
+        );
+    }
 
     let db = state.db.lock().await;
 
-    // Get the repo to find its local path before deleting
     let repo = db::repos::get_repo_by_id(&db, id)?;
 
     if let Some(ref repo) = repo {

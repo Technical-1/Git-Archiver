@@ -117,6 +117,43 @@ impl TaskManager {
         }
     }
 
+    /// Signals cancellation for the task at `repo_id` and waits up to `timeout`
+    /// for the worker to acknowledge by calling `mark_complete`.
+    ///
+    /// Unlike `cancel()`, this does NOT remove the entry from active_tasks
+    /// up-front — the worker is given the chance to observe the cancellation,
+    /// finish its in-flight cleanup, and call `mark_complete()` itself.
+    /// `is_active()` returning false is what we treat as acknowledgement.
+    ///
+    /// Returns `true` if the task became inactive within the timeout,
+    /// `false` if it was still active when the timeout elapsed.
+    pub async fn cancel_and_wait(
+        &self,
+        repo_id: i64,
+        timeout: std::time::Duration,
+    ) -> bool {
+        // Clone the token without removing the entry. The worker's running
+        // task holds another clone via get_cancellation_token() and is
+        // either checking it or awaiting an operation that respects it.
+        let Some(token) = self.get_cancellation_token(repo_id) else {
+            // Nothing active for this repo — nothing to wait for.
+            return true;
+        };
+        token.cancel();
+
+        // Poll until the worker calls mark_complete() (which removes the
+        // entry from active_tasks), or the timeout elapses.
+        let start = std::time::Instant::now();
+        let poll = std::time::Duration::from_millis(25);
+        while self.is_active(repo_id) {
+            if start.elapsed() >= timeout {
+                return false;
+            }
+            tokio::time::sleep(poll).await;
+        }
+        true
+    }
+
     /// Cancels all active per-repo tasks.
     pub async fn cancel_all(&self) {
         // Collect all entries first to avoid holding the lock during cancellation.
@@ -133,7 +170,6 @@ impl TaskManager {
     }
 
     /// Returns `true` if a task for the given repo ID is currently active.
-    #[allow(dead_code)]
     pub fn is_active(&self, repo_id: i64) -> bool {
         self.active_tasks.contains_key(&repo_id)
     }
@@ -242,6 +278,58 @@ mod tests {
         // Should not panic or error.
         manager.cancel(999).await;
         assert_eq!(manager.active_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_cancel_and_wait_returns_true_when_worker_marks_complete() {
+        let (manager, _rx) = TaskManager::new(4);
+        manager.enqueue(Task::Clone(7)).await.unwrap();
+        assert!(manager.is_active(7));
+
+        // Grab the token so we can verify it gets cancelled.
+        let token = manager.get_cancellation_token(7).unwrap();
+        assert!(!token.is_cancelled());
+
+        // Simulate the worker observing cancellation and finishing cleanup
+        // after ~50ms by calling mark_complete().
+        let m = manager.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            m.mark_complete(7);
+        });
+
+        let acknowledged = manager
+            .cancel_and_wait(7, std::time::Duration::from_secs(1))
+            .await;
+        assert!(acknowledged, "Worker should have acknowledged within 1s");
+        assert!(!manager.is_active(7));
+        assert!(token.is_cancelled(), "Cancellation token should have been signalled");
+    }
+
+    #[tokio::test]
+    async fn test_cancel_and_wait_returns_false_on_timeout() {
+        let (manager, _rx) = TaskManager::new(4);
+        manager.enqueue(Task::Clone(8)).await.unwrap();
+
+        // No one calls mark_complete — the worker is "stuck". The poll loop
+        // should hit the timeout and return false.
+        let acknowledged = manager
+            .cancel_and_wait(8, std::time::Duration::from_millis(150))
+            .await;
+        assert!(!acknowledged, "Should have timed out");
+
+        // Entry still present in active_tasks because nobody marked complete.
+        assert!(manager.is_active(8));
+    }
+
+    #[tokio::test]
+    async fn test_cancel_and_wait_returns_true_when_not_active() {
+        let (manager, _rx) = TaskManager::new(4);
+        // Never enqueued — nothing to wait for.
+        let acknowledged = manager
+            .cancel_and_wait(99, std::time::Duration::from_secs(1))
+            .await;
+        assert!(acknowledged, "No-op cancel_and_wait should return true immediately");
     }
 
     #[tokio::test]

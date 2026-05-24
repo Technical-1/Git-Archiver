@@ -850,18 +850,26 @@ async fn handle_refresh_statuses(
         }
     };
 
-    // Update each repo's status in the DB
+    // Build a name-keyed lookup so we match owner/name → repo regardless of
+    // any future change to detect_repo_statuses' return ordering. Trusting
+    // positional alignment is a latent bug — make it explicit and bounded.
+    let mut by_name: std::collections::HashMap<(&str, &str), &crate::models::Repository> =
+        std::collections::HashMap::with_capacity(repos.len());
+    for r in &repos {
+        by_name.insert((r.owner.as_str(), r.name.as_str()), r);
+    }
+
     let db = db.lock().await;
-    for (i, (_owner, _name, new_status_opt)) in statuses.iter().enumerate() {
-        if i >= repos.len() {
+    for (owner, name, new_status_opt) in &statuses {
+        let Some(repo) = by_name.get(&(owner.as_str(), name.as_str())) else {
+            log::warn!("Status returned for unknown repo {}/{}", owner, name);
             continue;
-        }
-        let Some(id) = repos[i].id else { continue };
+        };
+        let Some(id) = repo.id else { continue };
 
         if let Some(new_status) = new_status_opt {
-            if repos[i].status != *new_status {
+            if repo.status != *new_status {
                 let _ = db::repos::update_repo_status(&db, id, new_status, None);
-
                 if let Ok(Some(updated_repo)) = db::repos::get_repo_by_id(&db, id) {
                     let _ = app_handle.emit("repo-updated", &updated_repo);
                 }

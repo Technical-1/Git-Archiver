@@ -174,6 +174,28 @@ pub fn extract_archive(archive_path: &Path, dest_dir: &Path) -> Result<(), AppEr
         let mut entry = entry_result?;
         let entry_path = entry.path()?;
 
+        // Skip Symlink, Hardlink, Char-device, Block-device, and Fifo entries.
+        // None of these belong in a git source archive; allowing them would
+        // create files inside dest_dir that could enable post-extraction
+        // TOCTOU attacks (symlinks/hardlinks) or unexpected device/IPC nodes
+        // (char/block/fifo). Regular files and directories proceed normally.
+        let entry_type = entry.header().entry_type();
+        if matches!(
+            entry_type,
+            tar::EntryType::Symlink
+                | tar::EntryType::Link
+                | tar::EntryType::Char
+                | tar::EntryType::Block
+                | tar::EntryType::Fifo
+        ) {
+            log::warn!(
+                "Skipping {:?} entry '{}' during archive extraction",
+                entry_type,
+                entry_path.display()
+            );
+            continue;
+        }
+
         // Reject entries with path traversal components
         for component in entry_path.components() {
             match component {
@@ -373,6 +395,53 @@ mod tests {
         assert!(
             !tmp.path().join("escape.txt").exists(),
             "File should not have been extracted outside dest_dir"
+        );
+    }
+
+    #[test]
+    fn test_extract_skips_symlink_entries() {
+        // Build a tar.xz containing one regular file ("ok.txt") and one
+        // symlink entry ("evil-link" → "/etc/passwd"). After extraction,
+        // the regular file should exist and the symlink should NOT exist.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let archive_path = tmp.path().join("withlink.tar.xz");
+
+        {
+            let file = fs::File::create(&archive_path).unwrap();
+            let encoder = XzEncoder::new(file, 1);
+            let mut builder = Builder::new(encoder);
+
+            // Regular file entry
+            let content = b"safe";
+            let mut hdr = tar::Header::new_gnu();
+            hdr.set_path("ok.txt").unwrap();
+            hdr.set_size(content.len() as u64);
+            hdr.set_entry_type(tar::EntryType::Regular);
+            hdr.set_mode(0o644);
+            hdr.set_cksum();
+            builder.append(&hdr, &content[..]).unwrap();
+
+            // Symlink entry pointing to a sensitive system path
+            let mut link_hdr = tar::Header::new_gnu();
+            link_hdr.set_path("evil-link").unwrap();
+            link_hdr.set_size(0);
+            link_hdr.set_entry_type(tar::EntryType::Symlink);
+            link_hdr.set_link_name("/etc/passwd").unwrap();
+            link_hdr.set_mode(0o777);
+            link_hdr.set_cksum();
+            builder.append(&link_hdr, std::io::empty()).unwrap();
+
+            let encoder = builder.into_inner().unwrap();
+            encoder.finish().unwrap();
+        }
+
+        let dest = tmp.path().join("dest");
+        extract_archive(&archive_path, &dest).expect("extraction should succeed (symlinks just skipped)");
+
+        assert!(dest.join("ok.txt").exists(), "regular file should be extracted");
+        assert!(
+            !dest.join("evil-link").exists() && dest.join("evil-link").symlink_metadata().is_err(),
+            "symlink entry should NOT have been created"
         );
     }
 }

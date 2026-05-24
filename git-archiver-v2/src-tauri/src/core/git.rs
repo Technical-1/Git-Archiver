@@ -6,7 +6,8 @@ use git2::{FetchOptions, RemoteCallbacks, Repository};
 use crate::error::AppError;
 
 /// Clone a Git repository to the specified destination path.
-/// Uses shallow clone (depth 1) for efficiency.
+/// Performs a full clone (not shallow) so that subsequent `fetch_and_pull`
+/// operations have the ancestry needed for fast-forward merge analysis.
 ///
 /// `progress_callback`: Optional callback receiving (progress_pct 0.0-1.0, message).
 /// Return `false` from the callback to cancel the clone.
@@ -40,7 +41,6 @@ where
 
     let mut fetch_opts = FetchOptions::new();
     fetch_opts.remote_callbacks(callbacks);
-    fetch_opts.depth(1);
 
     RepoBuilder::new()
         .fetch_options(fetch_opts)

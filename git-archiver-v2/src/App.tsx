@@ -7,9 +7,11 @@ import { DataTable } from "@/components/repo-table/data-table";
 import { ActivityLog } from "@/components/activity-log";
 import { StatusBar } from "@/components/status-bar";
 import { Toaster } from "@/components/ui/toaster";
+import { OnboardingTour } from "@/components/onboarding-tour";
 import { useRepoStore } from "@/stores/repo-store";
 import { useTaskStore } from "@/stores/task-store";
 import { useSettingsStore } from "@/stores/settings-store";
+import { useTourStore, TUTORIAL_COMPLETED_KEY } from "@/stores/tour-store";
 import type { TaskProgress, Repository } from "@/lib/types";
 
 interface TaskErrorPayload {
@@ -37,6 +39,11 @@ function App() {
   useEffect(() => {
     repoStore.fetchRepos();
     settingsStore.fetchSettings();
+    // First-launch onboarding tour. Reuse useTourStore.getState() to read
+    // live state and dispatch synchronously without taking a dep on the store.
+    if (localStorage.getItem(TUTORIAL_COMPLETED_KEY) !== "true") {
+      useTourStore.getState().startTour();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -155,6 +162,7 @@ function App() {
         <ActivityLog />
         <StatusBar />
       </div>
+      <OnboardingTour />
       <Toaster />
     </ThemeProvider>
   );

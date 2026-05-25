@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { Repository, RepoStatus } from "@/lib/types";
 import * as commands from "@/lib/commands";
+import { toast } from "@/hooks/use-toast";
 
 export interface RepoStore {
   repos: Repository[];
@@ -29,7 +30,13 @@ export const useRepoStore = create<RepoStore>((set, get) => ({
         statusFilter ?? undefined,
       );
       set({ repos, loading: false });
-    } catch {
+    } catch (err) {
+      console.error("fetchRepos failed", err);
+      toast({
+        variant: "destructive",
+        title: "Failed to load repositories",
+        description: String(err),
+      });
       set({ loading: false });
     }
   },

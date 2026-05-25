@@ -20,12 +20,12 @@ pnpm tauri dev                    # Run app with hot reload
 # Build
 pnpm tauri build                  # Production build
 
-# Rust tests (105 tests)
+# Rust tests (104 unit + 6 integration)
 cargo test                        # Run all backend tests
 cargo test core::git              # Single module
 cargo test -- --test-threads=1    # Sequential execution
 
-# Frontend tests (130 tests)
+# Frontend tests (138 tests)
 pnpm test                         # Run all frontend tests
 pnpm test -- src/__tests__/App    # Single test file
 

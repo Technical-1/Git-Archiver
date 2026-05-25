@@ -13,6 +13,10 @@ pub struct RepoInfo {
     #[allow(dead_code)]
     pub is_private: bool,
     pub not_found: bool,
+    /// True when GraphQL returned an error for this repo (rate limit, transient
+    /// failure, partial response). Caller should NOT update the DB status —
+    /// treat as "no information available".
+    pub unknown: bool,
 }
 
 /// GitHub API rate limit information.
@@ -129,6 +133,7 @@ impl GitHubClient {
                 archived: false,
                 is_private: false,
                 not_found: true,
+                unknown: false,
             });
         }
 
@@ -155,6 +160,7 @@ impl GitHubClient {
             archived: repo_data.archived,
             is_private: repo_data.private,
             not_found: false,
+            unknown: false,
         })
     }
 
@@ -255,6 +261,37 @@ impl GitHubClient {
 
         let json: serde_json::Value = response.json().await?;
 
+        // Inspect the errors array first. GitHub returns partial data with
+        // errors populated when individual repos fail (rate limit, private,
+        // etc.); we need to flag those rather than treat them as deleted.
+        let mut errored_keys: std::collections::HashSet<String> = Default::default();
+        if let Some(errors) = json.get("errors").and_then(|e| e.as_array()) {
+            for err in errors {
+                log::warn!("GitHub GraphQL error: {}", err);
+                // Our query is single-level (alias → repository(...) → fields),
+                // so error paths should always be exactly [aliasKey]. Defensively
+                // accept length 1; if a future query change produces deeper paths
+                // we want to notice and re-evaluate rather than silently mis-attribute.
+                if let Some(path) = err.get("path").and_then(|p| p.as_array()) {
+                    match path.len() {
+                        1 => {
+                            if let Some(key) = path[0].as_str() {
+                                errored_keys.insert(key.to_string());
+                            }
+                        }
+                        0 => {} // no path — can't attribute, skip
+                        _ => {
+                            log::warn!(
+                                "GraphQL error path has unexpected depth {} (expected 1): {:?}",
+                                path.len(),
+                                path
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
         let data = json
             .get("data")
             .ok_or_else(|| AppError::Custom("GraphQL response missing 'data' field".into()))?;
@@ -262,20 +299,30 @@ impl GitHubClient {
         let mut results = Vec::with_capacity(repos.len());
         for i in 0..repos.len() {
             let key = format!("repo{}", i);
+            if errored_keys.contains(&key) {
+                results.push(RepoInfo {
+                    description: None,
+                    archived: false,
+                    is_private: false,
+                    not_found: false,
+                    unknown: true,
+                });
+                continue;
+            }
             if let Some(repo_data) = data.get(&key) {
                 if repo_data.is_null() {
-                    // Repository not found in GraphQL means deleted/not accessible
                     results.push(RepoInfo {
                         description: None,
                         archived: false,
                         is_private: false,
                         not_found: true,
+                        unknown: false,
                     });
                 } else {
                     let description = repo_data
                         .get("description")
                         .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
+                        .map(String::from);
                     let is_archived = repo_data
                         .get("isArchived")
                         .and_then(|v| v.as_bool())
@@ -290,15 +337,17 @@ impl GitHubClient {
                         archived: is_archived,
                         is_private,
                         not_found: false,
+                        unknown: false,
                     });
                 }
             } else {
-                // Missing key - treat as not found
+                // Missing key with no error → treat as unknown rather than deleted
                 results.push(RepoInfo {
                     description: None,
                     archived: false,
                     is_private: false,
-                    not_found: true,
+                    not_found: false,
+                    unknown: true,
                 });
             }
         }
@@ -330,17 +379,17 @@ impl GitHubClient {
         })
     }
 
-    /// Detect repository statuses (active/archived/deleted) for multiple repos.
-    /// Uses batch GraphQL if token available, REST fallback otherwise.
+    /// Detect repository statuses for multiple repos. Returns one entry per
+    /// input repo; status is `None` for repos with no information (rate limit,
+    /// GraphQL error). The caller should leave DB unchanged for those.
     pub async fn detect_repo_statuses(
         &self,
         repos: &[(String, String)],
-    ) -> Result<Vec<(String, String, RepoStatus)>, AppError> {
+    ) -> Result<Vec<(String, String, Option<RepoStatus>)>, AppError> {
         if repos.is_empty() {
             return Ok(Vec::new());
         }
 
-        // Convert to borrowed tuples for batch_get_repo_info
         let borrowed: Vec<(&str, &str)> = repos
             .iter()
             .map(|(o, n)| (o.as_str(), n.as_str()))
@@ -351,12 +400,14 @@ impl GitHubClient {
         let mut results = Vec::with_capacity(repos.len());
         for (i, info) in infos.into_iter().enumerate() {
             let (owner, name) = &repos[i];
-            let status = if info.not_found {
-                RepoStatus::Deleted
+            let status = if info.unknown {
+                None
+            } else if info.not_found {
+                Some(RepoStatus::Deleted)
             } else if info.archived {
-                RepoStatus::Archived
+                Some(RepoStatus::Archived)
             } else {
-                RepoStatus::Active
+                Some(RepoStatus::Active)
             };
             results.push((owner.clone(), name.clone(), status));
         }
@@ -561,9 +612,9 @@ mod tests {
         let statuses = client.detect_repo_statuses(&repos).await.unwrap();
 
         assert_eq!(statuses.len(), 3);
-        assert_eq!(statuses[0].2, RepoStatus::Active);
-        assert_eq!(statuses[1].2, RepoStatus::Archived);
-        assert_eq!(statuses[2].2, RepoStatus::Deleted);
+        assert_eq!(statuses[0].2, Some(RepoStatus::Active));
+        assert_eq!(statuses[1].2, Some(RepoStatus::Archived));
+        assert_eq!(statuses[2].2, Some(RepoStatus::Deleted));
     }
 
     #[tokio::test]
@@ -622,5 +673,64 @@ mod tests {
         );
 
         mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_graphql_errors_field_treated_as_unknown_not_deleted() {
+        // Three repos:
+        //   repo0 — healthy data
+        //   repo1 — errored (rate-limited), with explicit errors entry
+        //   repo2 — missing from BOTH data AND errors (server-side dropped silently)
+        // All three "no info" cases (errored + missing) must yield unknown=true,
+        // not_found=false. Only an explicit `null` in data means not_found.
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                "data": {
+                    "repo0": {"description":"OK","isArchived":false,"isPrivate":false},
+                    "repo1": null
+                },
+                "errors": [
+                    {"message":"Rate limit hit for this resource","path":["repo1"]}
+                ]
+            }"#,
+            )
+            .create_async()
+            .await;
+
+        let client = GitHubClient::new_with_base_url(Some("test-token".into()), server.url());
+        let repos = vec![
+            ("owner", "alive"),
+            ("owner", "ratelimited"),
+            ("owner", "dropped"),
+        ];
+        let results = client.batch_get_repo_info(&repos).await.unwrap();
+
+        assert_eq!(results.len(), 3);
+
+        assert!(!results[0].unknown);
+        assert!(!results[0].not_found);
+
+        assert!(
+            results[1].unknown,
+            "Rate-limited (errored) repo should be unknown"
+        );
+        assert!(
+            !results[1].not_found,
+            "Rate-limited repo should NOT be not_found"
+        );
+
+        assert!(
+            results[2].unknown,
+            "Missing-key (no data, no error) repo should be unknown"
+        );
+        assert!(
+            !results[2].not_found,
+            "Missing-key repo should NOT be not_found"
+        );
     }
 }

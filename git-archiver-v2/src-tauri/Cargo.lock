@@ -1435,6 +1435,7 @@ version = "2.0.0"
 dependencies = [
  "chrono",
  "dashmap",
+ "dirs",
  "env_logger",
  "git2",
  "keyring",

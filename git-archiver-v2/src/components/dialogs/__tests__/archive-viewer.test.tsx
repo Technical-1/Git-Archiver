@@ -1,5 +1,6 @@
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { open as tauriOpen } from "@tauri-apps/plugin-dialog";
 import { ArchiveViewer } from "../archive-viewer";
 import type { Repository, ArchiveView } from "@/lib/types";
 
@@ -11,11 +12,18 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
 }));
 
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: vi.fn(),
+}));
+
 vi.mock("@/lib/commands", () => ({
   listArchives: (...args: unknown[]) => mockListArchives(...args),
   extractArchive: (...args: unknown[]) => mockExtractArchive(...args),
   deleteArchive: (...args: unknown[]) => mockDeleteArchive(...args),
 }));
+
+// Typed reference to the mocked open function
+const mockOpen = vi.mocked(tauriOpen);
 
 const repo: Repository = {
   id: 1,
@@ -167,5 +175,48 @@ describe("ArchiveViewer", () => {
 
     fireEvent.click(screen.getByText("Cancel"));
     expect(screen.queryByText("Confirm")).not.toBeInTheDocument();
+  });
+
+  it("opens the Tauri directory dialog and extracts to the chosen path", async () => {
+    mockListArchives.mockResolvedValueOnce(sampleArchives);
+    mockOpen.mockResolvedValue("/Users/me/extracted");
+    mockExtractArchive.mockResolvedValue(undefined);
+
+    render(
+      <ArchiveViewer repo={repo} open={true} onOpenChange={() => {}} />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("2 archives available")).toBeInTheDocument(),
+    );
+
+    const extractBtns = screen.getAllByLabelText("Extract archive");
+    fireEvent.click(extractBtns[0]);
+
+    await waitFor(() => {
+      expect(mockOpen).toHaveBeenCalledWith(
+        expect.objectContaining({ directory: true }),
+      );
+      expect(mockExtractArchive).toHaveBeenCalledWith(10, "/Users/me/extracted");
+    });
+  });
+
+  it("does not extract when user cancels the dialog", async () => {
+    mockListArchives.mockResolvedValueOnce(sampleArchives);
+    mockOpen.mockResolvedValue(null);
+
+    render(
+      <ArchiveViewer repo={repo} open={true} onOpenChange={() => {}} />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("2 archives available")).toBeInTheDocument(),
+    );
+
+    const extractBtns = screen.getAllByLabelText("Extract archive");
+    fireEvent.click(extractBtns[0]);
+
+    await waitFor(() => expect(mockOpen).toHaveBeenCalled());
+    expect(mockExtractArchive).not.toHaveBeenCalled();
   });
 });

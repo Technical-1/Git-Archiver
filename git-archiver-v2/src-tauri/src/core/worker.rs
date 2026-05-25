@@ -36,7 +36,11 @@ fn clean_working_tree(repo_dir: &Path) {
     for entry in match std::fs::read_dir(repo_dir) {
         Ok(entries) => entries,
         Err(e) => {
-            log::warn!("Failed to read dir {} for cleanup: {}", repo_dir.display(), e);
+            log::warn!(
+                "Failed to read dir {} for cleanup: {}",
+                repo_dir.display(),
+                e
+            );
             return;
         }
     } {
@@ -277,8 +281,7 @@ async fn handle_clone_inner(
 
     // If the clone path already contains a valid git repo (e.g., from a previous
     // delete-without-removing-files), reuse it instead of failing.
-    let already_cloned =
-        clone_path.join(".git").exists() || clone_path.join("HEAD").exists();
+    let already_cloned = clone_path.join(".git").exists() || clone_path.join("HEAD").exists();
 
     if already_cloned {
         log::info!(
@@ -323,10 +326,7 @@ async fn handle_clone_inner(
     }
 
     // Fetch repo description from GitHub (non-fatal)
-    match github_client
-        .get_repo_info(&repo.owner, &repo.name)
-        .await
-    {
+    match github_client.get_repo_info(&repo.owner, &repo.name).await {
         Ok(info) => {
             let db = db.lock().await;
             let _ = db::repos::update_repo_metadata(
@@ -579,10 +579,7 @@ async fn handle_update_inner(
     .map_err(|e| AppError::Custom(format!("Pull task panicked: {}", e)))??;
 
     // Refresh repo description from GitHub (non-fatal, runs regardless of updates)
-    match github_client
-        .get_repo_info(&repo.owner, &repo.name)
-        .await
-    {
+    match github_client.get_repo_info(&repo.owner, &repo.name).await {
         Ok(info) => {
             let db = db.lock().await;
             let _ = db::repos::update_repo_metadata(
@@ -850,25 +847,39 @@ async fn handle_refresh_statuses(
         }
     };
 
-    // Update each repo's status in the DB
+    // Build a name-keyed lookup so we match owner/name → repo regardless of
+    // any future change to detect_repo_statuses' return ordering. Trusting
+    // positional alignment is a latent bug — make it explicit and bounded.
+    let mut by_name: std::collections::HashMap<(&str, &str), &crate::models::Repository> =
+        std::collections::HashMap::with_capacity(repos.len());
+    for r in &repos {
+        by_name.insert((r.owner.as_str(), r.name.as_str()), r);
+    }
+
     let db = db.lock().await;
-    for (i, (_owner, _name, new_status)) in statuses.iter().enumerate() {
-        if i < repos.len() {
-            if let Some(id) = repos[i].id {
-                if repos[i].status != *new_status {
-                    let _ = db::repos::update_repo_status(&db, id, new_status, None);
+    for (owner, name, new_status_opt) in &statuses {
+        let Some(repo) = by_name.get(&(owner.as_str(), name.as_str())) else {
+            log::warn!("Status returned for unknown repo {}/{}", owner, name);
+            continue;
+        };
+        let Some(id) = repo.id else { continue };
 
-                    // Emit repo-updated event
-                    if let Ok(Some(updated_repo)) = db::repos::get_repo_by_id(&db, id) {
-                        let _ = app_handle.emit("repo-updated", &updated_repo);
-                    }
+        if let Some(new_status) = new_status_opt {
+            if repo.status != *new_status {
+                let _ = db::repos::update_repo_status(&db, id, new_status, None);
+                if let Ok(Some(updated_repo)) = db::repos::get_repo_by_id(&db, id) {
+                    let _ = app_handle.emit("repo-updated", &updated_repo);
                 }
-
-                // Update last_checked timestamp
-                let now = Utc::now();
-                let _ = db::repos::update_repo_timestamps(&db, id, None, None, Some(now));
             }
         }
+        // else: unknown — leave status unchanged
+
+        // We update last_checked even on unknown so we don't immediately
+        // re-request the same rate-limited/erroring repo on the next refresh
+        // cycle. The status field tells the user what we know; last_checked
+        // tells the worker when to next attempt.
+        let now = Utc::now();
+        let _ = db::repos::update_repo_timestamps(&db, id, None, None, Some(now));
     }
 
     // Emit progress: complete

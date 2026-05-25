@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import ReactMarkdown from "react-markdown";
+import { SafeMarkdown } from "@/components/safe-markdown";
 import {
   Dialog,
   DialogContent,
@@ -63,7 +63,7 @@ export function ReadmeDialog({
           )}
           {!loading && content !== null && (
             <div className="prose prose-sm dark:prose-invert max-w-none px-1">
-              <ReactMarkdown>{content}</ReactMarkdown>
+              <SafeMarkdown>{content}</SafeMarkdown>
             </div>
           )}
         </div>

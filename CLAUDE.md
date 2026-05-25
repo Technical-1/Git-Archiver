@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-Git Archiver is a cross-platform desktop application built with Rust/Tauri v2 and React/TypeScript. It clones GitHub repositories, tracks their status via the GitHub API, and creates versioned `.tar.xz` archives when updates are detected. The v2.0.0 release is a complete rewrite from the original Python/PyQt5 version (legacy code remains in `src/` and `scripts/` at root).
+Git Archiver is a cross-platform desktop application built with Rust/Tauri v2 and React/TypeScript. It clones GitHub repositories, tracks their status via the GitHub API, and creates versioned `.tar.xz` archives when updates are detected. The v2.0.0 release is a complete rewrite from the original Python/PyQt5 version.
 
 ## Commands
 
@@ -46,7 +46,6 @@ The backend is organized into three layers:
 - `tasks.rs` — clone_repo, update_repo, update_all, stop_all_tasks
 - `archives.rs` — list_archives, extract_archive, delete_archive
 - `settings.rs` — get_settings, save_settings, check_rate_limit
-- `migrate.rs` — migrate_from_json (v1.x import)
 
 **Core** (`core/`) — Business logic:
 - `git.rs` — Clone/fetch via libgit2 (bare repos, credential callbacks)
@@ -104,7 +103,7 @@ URLs → SQLite (repos table) → data/<repo>.git/ → archives table + versions
 
 ### External Dependencies
 
-No CLI tools required at runtime. Git operations use libgit2 (via `git2` crate). Archive operations use Rust `tar` + `xz2` crates. SQLite is bundled. TLS is rustls (pure Rust).
+No CLI tools required at runtime. Git operations use libgit2 (via `git2` crate). Archive operations use Rust `tar` + `xz2` crates. SQLite is bundled. TLS for HTTP traffic uses rustls (pure Rust); libgit2's HTTPS transport uses statically-linked vendored OpenSSL (via `git2 = { features = ["vendored-openssl"] }`).
 
 ### Security Notes
 
@@ -112,4 +111,4 @@ No CLI tools required at runtime. Git operations use libgit2 (via `git2` crate).
 - URL validation rejects percent-encoded path traversal
 - GraphQL inputs sanitized against injection
 - Archive extraction validates paths against tar-slip
-- rustls TLS (no system OpenSSL dependency)
+- rustls TLS for HTTP traffic; vendored statically-linked OpenSSL for libgit2 HTTPS transport (no *system* OpenSSL dependency, but OpenSSL is present inside the binary)

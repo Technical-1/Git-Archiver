@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
-import ReactMarkdown from "react-markdown";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { SafeMarkdown } from "@/components/safe-markdown";
 import { Download, Trash2, FileText, X } from "lucide-react";
 import {
   Dialog,
@@ -87,12 +88,11 @@ export function ArchiveViewer({ repo, open, onOpenChange }: ArchiveViewerProps) 
   };
 
   const handleExtract = async (archiveId: number) => {
-    // In Tauri, we would use a file dialog to pick a destination.
-    // For now, prompt the user for a path using a simple prompt.
-    const destDir = window.prompt(
-      "Enter destination directory path for extraction:",
-    );
-    if (!destDir) return;
+    const destDir = await openDialog({
+      directory: true,
+      title: "Select destination directory",
+    });
+    if (!destDir || typeof destDir !== "string") return;
 
     try {
       await commands.extractArchive(archiveId, destDir);
@@ -255,7 +255,7 @@ export function ArchiveViewer({ repo, open, onOpenChange }: ArchiveViewerProps) 
               </Button>
             </div>
             <div className="max-h-60 overflow-y-auto rounded-md bg-muted p-3 prose prose-sm dark:prose-invert max-w-none">
-              <ReactMarkdown>{readmeContent}</ReactMarkdown>
+              <SafeMarkdown>{readmeContent}</SafeMarkdown>
             </div>
           </div>
         )}

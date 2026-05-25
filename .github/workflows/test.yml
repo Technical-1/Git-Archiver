@@ -46,6 +46,11 @@ jobs:
         working-directory: git-archiver-v2/src-tauri
         run: cargo clippy -- -D warnings
 
+      - name: Rust security audit
+        uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Frontend tests
         working-directory: git-archiver-v2
         run: pnpm test

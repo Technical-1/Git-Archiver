@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use serde::Serialize;
 use tauri::State;
 
@@ -7,6 +9,60 @@ use crate::db;
 use crate::error::AppError;
 use crate::models::Repository;
 use crate::state::AppState;
+
+/// Validate that an import file path is reasonable: under the user's home
+/// directory, a regular file, and with a known-safe extension. Prevents the
+/// renderer from coercing a read of arbitrary sensitive files.
+///
+/// Note: There is a TOCTOU window between this validation and the subsequent
+/// `read_to_string`. The threat model is renderer-side coercion (XSS,
+/// malicious dependency) — NOT a local-privilege boundary. A local attacker
+/// who can swap files between validation and read can already read them
+/// directly, so the TOCTOU gap is acceptable.
+fn validate_import_path(path: &Path) -> Result<(), AppError> {
+    let canonical = path.canonicalize().map_err(|e| {
+        AppError::UserVisible(format!("Cannot resolve path '{}': {}", path.display(), e))
+    })?;
+
+    if !canonical.is_file() {
+        return Err(AppError::UserVisible(format!(
+            "Path '{}' is not a regular file.",
+            canonical.display()
+        )));
+    }
+
+    let home = dirs::home_dir()
+        .ok_or_else(|| AppError::Custom("Could not determine home directory.".to_string()))?;
+    let canonical_home = home
+        .canonicalize()
+        .map_err(|e| AppError::Custom(format!("Cannot resolve home dir: {}", e)))?;
+    if !canonical.starts_with(&canonical_home) {
+        return Err(AppError::UserVisible(format!(
+            "Import path must be inside your home directory; got '{}'.",
+            canonical.display()
+        )));
+    }
+
+    // Allowlist of extensions commonly used for plaintext URL lists. Comparison
+    // is case-insensitive (".TXT" accepts as ".txt"). Markdown is included
+    // because users sometimes maintain repo lists as bullet-point .md files;
+    // we never execute or render the file, only line-split it.
+    let allowed_exts = ["txt", "csv", "list", "md"];
+    let ext_ok = canonical
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| allowed_exts.contains(&e.to_lowercase().as_str()))
+        .unwrap_or(false);
+    if !ext_ok {
+        return Err(AppError::UserVisible(format!(
+            "Import file must have one of these extensions: {}. Got '{}'.",
+            allowed_exts.join(", "),
+            canonical.display()
+        )));
+    }
+
+    Ok(())
+}
 
 /// Summary returned after a bulk URL import.
 #[derive(Debug, Clone, Serialize)]
@@ -95,12 +151,22 @@ pub async fn delete_repo(
     remove_files: bool,
     state: State<'_, AppState>,
 ) -> Result<(), AppError> {
-    // Cancel any active task for this repo
-    state.task_manager.cancel(id).await;
+    // Cancel any active task and wait briefly for the worker to acknowledge
+    // so we don't race with in-flight file writes or archive inserts.
+    let acknowledged = state
+        .task_manager
+        .cancel_and_wait(id, std::time::Duration::from_secs(5))
+        .await;
+    if !acknowledged {
+        log::warn!(
+            "Task for repo {} did not acknowledge cancellation within 5s; \
+             proceeding with deletion (in-flight writes may produce orphan files).",
+            id
+        );
+    }
 
     let db = state.db.lock().await;
 
-    // Get the repo to find its local path before deleting
     let repo = db::repos::get_repo_by_id(&db, id)?;
 
     if let Some(ref repo) = repo {
@@ -132,7 +198,10 @@ pub async fn import_from_file(
     path: String,
     state: State<'_, AppState>,
 ) -> Result<BulkAddResult, AppError> {
-    let content = std::fs::read_to_string(&path)
+    let path_ref = std::path::Path::new(&path);
+    validate_import_path(path_ref)?;
+
+    let content = std::fs::read_to_string(path_ref)
         .map_err(|e| AppError::UserVisible(format!("Failed to read file '{}': {}", path, e)))?;
 
     let mut added: u32 = 0;
@@ -200,4 +269,47 @@ pub async fn import_from_file(
         skipped,
         errors,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_import_path;
+    use std::path::Path;
+
+    #[test]
+    fn test_validate_rejects_outside_home() {
+        // /usr is guaranteed to exist on every Unix-like system and is outside $HOME,
+        // making this assertion stable across local dev and CI without depending on
+        // /etc/passwd presence.
+        let result = validate_import_path(Path::new("/usr"));
+        assert!(result.is_err(), "Should reject /usr (outside home)");
+    }
+
+    #[test]
+    fn test_validate_rejects_disallowed_extension() {
+        let home = dirs::home_dir().unwrap();
+        let tmp_file = home.join(".audit-test-import.key");
+        std::fs::write(&tmp_file, "").unwrap();
+
+        let result = validate_import_path(&tmp_file);
+        assert!(result.is_err(), "Should reject .key extension");
+
+        let _ = std::fs::remove_file(&tmp_file);
+    }
+
+    #[test]
+    fn test_validate_accepts_txt_under_home() {
+        let home = dirs::home_dir().unwrap();
+        let tmp_file = home.join(".audit-test-import.txt");
+        std::fs::write(&tmp_file, "https://github.com/foo/bar").unwrap();
+
+        let result = validate_import_path(&tmp_file);
+        assert!(
+            result.is_ok(),
+            "Should accept .txt under home, got: {:?}",
+            result
+        );
+
+        let _ = std::fs::remove_file(&tmp_file);
+    }
 }

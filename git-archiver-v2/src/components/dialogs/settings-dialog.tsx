@@ -109,7 +109,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Settings</DialogTitle>
           <DialogDescription>
@@ -117,7 +117,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-6 py-4">
+        <div className="space-y-5 py-2">
           {/* GitHub Token */}
           <div className="space-y-2">
             <label className="text-sm font-medium" htmlFor="github-token">
@@ -252,18 +252,21 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
           </div>
 
           {/* Help */}
-          <div className="space-y-2 pt-2 border-t">
-            <h4 className="text-sm font-medium">Help</h4>
+          <div className="flex items-center justify-between gap-3 pt-3 border-t">
+            <div className="space-y-0.5">
+              <h4 className="text-sm font-medium">Help</h4>
+              <p className="text-xs text-muted-foreground">
+                Replays the first-launch walkthrough.
+              </p>
+            </div>
             <Button
               variant="outline"
               size="sm"
               onClick={handleReplayTour}
+              className="shrink-0"
             >
               Show tutorial again
             </Button>
-            <p className="text-xs text-muted-foreground">
-              Replays the first-launch walkthrough.
-            </p>
           </div>
         </div>
 

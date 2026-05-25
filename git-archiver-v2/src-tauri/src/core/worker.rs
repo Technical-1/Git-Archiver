@@ -79,12 +79,36 @@ const README_CANDIDATES: &[&str] = &[
     "README",
 ];
 
+/// Maximum README size to load into memory. A repository with a multi-GB
+/// README (accidental or pathological) would OOM the worker without this
+/// cap. 8 MiB is far larger than any reasonable Markdown README but small
+/// enough to fit comfortably in memory alongside the rest of the clone.
+const MAX_README_BYTES: u64 = 8 * 1024 * 1024;
+
 /// Read the README file from a directory, trying common filenames in order.
-/// Returns None if no README is found or if reading fails.
+/// Returns None if no README is found, if reading fails, or if the file
+/// exceeds the size cap.
 fn read_readme_from_dir(dir: &Path) -> Option<String> {
     for candidate in README_CANDIDATES {
         let path = dir.join(candidate);
         if path.is_file() {
+            match std::fs::metadata(&path) {
+                Ok(meta) if meta.len() > MAX_README_BYTES => {
+                    log::warn!(
+                        "Skipping {}: {} bytes exceeds {} byte cap",
+                        path.display(),
+                        meta.len(),
+                        MAX_README_BYTES
+                    );
+                    return None;
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    log::warn!("Failed to stat {}: {}", path.display(), e);
+                    return None;
+                }
+            }
+
             match std::fs::read_to_string(&path) {
                 Ok(content) => return Some(content),
                 Err(e) => {

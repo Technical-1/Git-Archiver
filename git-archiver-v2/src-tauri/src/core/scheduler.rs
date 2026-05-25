@@ -71,8 +71,16 @@ pub async fn scheduler_loop(
                         // Send notification
                         send_sync_notification(&app_handle);
 
-                        // Brief cooldown to avoid re-triggering within the same minute
-                        tokio::time::sleep(std::time::Duration::from_secs(61)).await;
+                        // Brief cooldown to avoid re-triggering within the same
+                        // minute, but also watch for sync_time changes during the
+                        // cooldown so a user edit doesn't have to wait 61s+1 day
+                        // to take effect.
+                        tokio::select! {
+                            _ = tokio::time::sleep(std::time::Duration::from_secs(61)) => {}
+                            _ = sync_time_rx.changed() => {
+                                log::info!("Sync time changed during cooldown, re-scheduling");
+                            }
+                        }
                     }
                     _ = sync_time_rx.changed() => {
                         log::info!("Sync time setting changed, re-scheduling");

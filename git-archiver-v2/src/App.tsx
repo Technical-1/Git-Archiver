@@ -111,6 +111,15 @@ function App() {
 
         // Clean up tracking
         seenTasksRef.current.delete(repo_url);
+
+        // Brief delay so the user sees the "failed" state before clearing,
+        // mirroring task-complete behavior. Without this, failed repos
+        // stayed in activeTasks forever, spinning the UI and inflating
+        // StatusBar counts. Use live store state (not the captured
+        // taskStore snapshot) — same rationale as the task-complete handler.
+        setTimeout(() => {
+          useTaskStore.getState().removeTask(repo_url);
+        }, 1500);
       },
     );
 

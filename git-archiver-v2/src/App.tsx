@@ -71,8 +71,12 @@ function App() {
       (event) => {
         const repoUrl = event.payload;
 
-        // Determine action from the last known stage
-        const lastTask = taskStore.activeTasks.get(repoUrl);
+        // Determine action from the last known stage. Read live store state
+        // — the `taskStore` reference captured by the [] useEffect deps holds
+        // the activeTasks Map snapshot from mount time, so a captured lookup
+        // is always undefined and every completion got labeled "Updated"
+        // even on first-time clones.
+        const lastTask = useTaskStore.getState().activeTasks.get(repoUrl);
         const wasClone = lastTask?.stage === "cloning" || lastTask?.stage === "archiving";
         const action = wasClone && !seenTasksRef.current.has(`updated:${repoUrl}`)
           ? "Cloned" : "Updated";
@@ -88,11 +92,12 @@ function App() {
         // Clean up tracking
         seenTasksRef.current.delete(repoUrl);
 
-        // Brief delay so the user sees the "complete" state before clearing
+        // Brief delay so the user sees the "complete" state before clearing.
+        // Same live-state rationale as above for the store reads.
         setTimeout(() => {
-          taskStore.removeTask(repoUrl);
+          useTaskStore.getState().removeTask(repoUrl);
           // Refresh repo list to pick up status/timestamp changes
-          repoStore.fetchRepos();
+          useRepoStore.getState().fetchRepos();
         }, 1500);
       },
     );

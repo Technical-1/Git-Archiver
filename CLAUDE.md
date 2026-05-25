@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-Git Archiver is a cross-platform desktop application built with Rust/Tauri v2 and React/TypeScript. It clones GitHub repositories, tracks their status via the GitHub API, and creates versioned `.tar.xz` archives when updates are detected. The v2.0.0 release is a complete rewrite from the original Python/PyQt5 version (legacy code remains in `src/` and `scripts/` at root).
+Git Archiver is a cross-platform desktop application built with Rust/Tauri v2 and React/TypeScript. It clones GitHub repositories, tracks their status via the GitHub API, and creates versioned `.tar.xz` archives when updates are detected. The v2.0.0 release is a complete rewrite from the original Python/PyQt5 version.
 
 ## Commands
 
@@ -46,7 +46,6 @@ The backend is organized into three layers:
 - `tasks.rs` — clone_repo, update_repo, update_all, stop_all_tasks
 - `archives.rs` — list_archives, extract_archive, delete_archive
 - `settings.rs` — get_settings, save_settings, check_rate_limit
-- `migrate.rs` — migrate_from_json (v1.x import)
 
 **Core** (`core/`) — Business logic:
 - `git.rs` — Clone/fetch via libgit2 (bare repos, credential callbacks)

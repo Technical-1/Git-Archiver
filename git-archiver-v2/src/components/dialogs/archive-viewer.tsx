@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import ReactMarkdown from "react-markdown";
+import { SafeMarkdown } from "@/components/safe-markdown";
 import { Download, Trash2, FileText, X } from "lucide-react";
 import {
   Dialog,
@@ -255,7 +255,7 @@ export function ArchiveViewer({ repo, open, onOpenChange }: ArchiveViewerProps) 
               </Button>
             </div>
             <div className="max-h-60 overflow-y-auto rounded-md bg-muted p-3 prose prose-sm dark:prose-invert max-w-none">
-              <ReactMarkdown>{readmeContent}</ReactMarkdown>
+              <SafeMarkdown>{readmeContent}</SafeMarkdown>
             </div>
           </div>
         )}

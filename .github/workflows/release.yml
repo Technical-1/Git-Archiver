@@ -67,3 +67,41 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      - name: Compute SHA-256 checksums (unix)
+        if: matrix.platform != 'windows-latest'
+        shell: bash
+        working-directory: git-archiver-v2/src-tauri/target
+        run: |
+          # tauri-action drops bundles into target/<triple>/release/bundle/<type>/.
+          # Hash every produced bundle artifact and write one checksums file
+          # per matrix entry so the upload step gets a unique filename.
+          set -euo pipefail
+          out="checksums-${{ matrix.platform }}.txt"
+          : > "$out"
+          while IFS= read -r -d '' f; do
+            (cd "$(dirname "$f")" && shasum -a 256 "$(basename "$f")") >> "../../$out" || true
+          done < <(find . -type f \( -name "*.dmg" -o -name "*.AppImage" -o -name "*.deb" \) -print0)
+          # Surface filename — even if empty, the upload step needs the file to exist.
+          mv "$out" "../../$out" 2>/dev/null || true
+          cat "../../$out" || true
+
+      - name: Compute SHA-256 checksums (windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        working-directory: git-archiver-v2/src-tauri/target
+        run: |
+          $out = "checksums-${{ matrix.platform }}.txt"
+          Get-ChildItem -Recurse -Include *.exe,*.msi | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($_.Name)"
+          } | Out-File -Encoding ascii $out
+          Get-Content $out
+
+      - name: Upload checksums as release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: git-archiver-v2/src-tauri/target/checksums-${{ matrix.platform }}.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

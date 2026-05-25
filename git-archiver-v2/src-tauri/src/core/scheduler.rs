@@ -1,26 +1,56 @@
 use std::sync::Arc;
 
-use chrono::{Local, NaiveTime};
+use chrono::{DateTime, Local, NaiveDateTime, NaiveTime, TimeZone};
 use tauri::{AppHandle, Manager};
 use tokio::sync::watch;
 
 use crate::core::task_manager::{Task, TaskManager};
 use crate::state::AppState;
 
-/// Compute the duration from now until the next occurrence of `target_time` in local timezone.
+/// Resolve a naive local datetime to a timezone-aware instant, picking a
+/// sensible answer when DST makes the local time ambiguous or nonexistent.
+///
+/// - **Ambiguous (fall-back day):** the wall clock reads the same time twice;
+///   use the earlier of the two instants so a 1:30 sync fires once on the
+///   first 1:30 and won't double-fire after the rewind.
+/// - **None (spring-forward gap):** the wall clock skips a time (e.g. 2:30
+///   doesn't exist). Shift the naive time forward by one hour so it lands
+///   in the post-gap zone, then resolve from there.
+fn local_naive_to_instant(
+    naive: NaiveDateTime,
+    fallback: DateTime<Local>,
+) -> DateTime<Local> {
+    match Local.from_local_datetime(&naive) {
+        chrono::LocalResult::Single(dt) => dt,
+        chrono::LocalResult::Ambiguous(earlier, _later) => earlier,
+        chrono::LocalResult::None => {
+            let shifted = naive + chrono::Duration::hours(1);
+            Local
+                .from_local_datetime(&shifted)
+                .single()
+                .unwrap_or(fallback)
+        }
+    }
+}
+
+/// Compute the duration from now until the next occurrence of `target_time`
+/// in the local timezone, DST-aware.
 fn duration_until(target_time: NaiveTime) -> std::time::Duration {
     let now = Local::now();
-    let today_target = now.date_naive().and_time(target_time);
 
-    let next = if now.naive_local() < today_target {
+    let today_naive = now.date_naive().and_time(target_time);
+    let today_target =
+        local_naive_to_instant(today_naive, now + chrono::Duration::hours(1));
+
+    let next = if now < today_target {
         today_target
     } else {
-        // Target time already passed today, schedule for tomorrow
-        today_target + chrono::Duration::days(1)
+        let tomorrow_naive =
+            (now.date_naive() + chrono::Duration::days(1)).and_time(target_time);
+        local_naive_to_instant(tomorrow_naive, now + chrono::Duration::days(1))
     };
 
-    let duration = next - now.naive_local();
-    duration
+    (next - now)
         .to_std()
         .unwrap_or(std::time::Duration::from_secs(60))
 }

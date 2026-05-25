@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import ReactMarkdown from "react-markdown";
 import { Download, Trash2, FileText, X } from "lucide-react";
 import {
@@ -87,12 +88,11 @@ export function ArchiveViewer({ repo, open, onOpenChange }: ArchiveViewerProps) 
   };
 
   const handleExtract = async (archiveId: number) => {
-    // In Tauri, we would use a file dialog to pick a destination.
-    // For now, prompt the user for a path using a simple prompt.
-    const destDir = window.prompt(
-      "Enter destination directory path for extraction:",
-    );
-    if (!destDir) return;
+    const destDir = await openDialog({
+      directory: true,
+      title: "Select destination directory",
+    });
+    if (!destDir || typeof destDir !== "string") return;
 
     try {
       await commands.extractArchive(archiveId, destDir);

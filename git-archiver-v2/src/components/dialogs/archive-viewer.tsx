@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { SafeMarkdown } from "@/components/safe-markdown";
-import { Download, Trash2, FileText, X } from "lucide-react";
+import { Download, Trash2, FileText, X, Loader2 } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -46,6 +46,10 @@ export function ArchiveViewer({ repo, open, onOpenChange }: ArchiveViewerProps) 
   const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
   const [readmeContent, setReadmeContent] = useState<string | null>(null);
   const [readmeLoading, setReadmeLoading] = useState(false);
+  // Tracks the archive currently being extracted so we can show a spinner
+  // and block double-clicks. Multi-GB tar.xz extractions can take tens of
+  // seconds and previously the UI looked frozen until completion.
+  const [extractingId, setExtractingId] = useState<number | null>(null);
 
   const fetchArchives = useCallback(async () => {
     if (repo.id === null) return;
@@ -94,6 +98,7 @@ export function ArchiveViewer({ repo, open, onOpenChange }: ArchiveViewerProps) 
     });
     if (!destDir || typeof destDir !== "string") return;
 
+    setExtractingId(archiveId);
     try {
       await commands.extractArchive(archiveId, destDir);
       toast({
@@ -106,6 +111,8 @@ export function ArchiveViewer({ repo, open, onOpenChange }: ArchiveViewerProps) 
         title: "Extraction failed",
         description: String(err),
       });
+    } finally {
+      setExtractingId(null);
     }
   };
 
@@ -218,9 +225,18 @@ export function ArchiveViewer({ repo, open, onOpenChange }: ArchiveViewerProps) 
                             size="icon"
                             className="h-7 w-7"
                             onClick={() => handleExtract(archive.id!)}
-                            aria-label="Extract archive"
+                            aria-label={
+                              extractingId === archive.id
+                                ? "Extracting archive..."
+                                : "Extract archive"
+                            }
+                            disabled={extractingId !== null}
                           >
-                            <Download className="h-3.5 w-3.5" />
+                            {extractingId === archive.id ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Download className="h-3.5 w-3.5" />
+                            )}
                           </Button>
                           <Button
                             variant="ghost"

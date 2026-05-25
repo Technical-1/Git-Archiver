@@ -36,7 +36,11 @@ interface RowActionsProps {
 
 export function RowActions({ repo }: RowActionsProps) {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [removeFiles, setRemoveFiles] = useState(false);
+  // Default to true so "Delete + re-add" gives a fresh clone — the most
+  // common reason to delete. Hub #323: leaving files behind silently traps
+  // the next add into reusing a stale (possibly broken) .git/ via the worker's
+  // already_cloned path.
+  const [removeFiles, setRemoveFiles] = useState(true);
   const [archiveViewerOpen, setArchiveViewerOpen] = useState(false);
   const deleteRepo = useRepoStore((s) => s.deleteRepo);
 
@@ -149,7 +153,7 @@ export function RowActions({ repo }: RowActionsProps) {
 
       <Dialog open={deleteDialogOpen} onOpenChange={(open) => {
         setDeleteDialogOpen(open);
-        if (!open) setRemoveFiles(false);
+        if (!open) setRemoveFiles(true);
       }}>
         <DialogContent>
           <DialogHeader>

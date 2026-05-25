@@ -1,4 +1,5 @@
 import { Joyride, STATUS, Step, EventData, EVENTS } from "react-joyride";
+import { useTheme } from "next-themes";
 import { useTourStore } from "@/stores/tour-store";
 import { useRepoStore } from "@/stores/repo-store";
 
@@ -16,10 +17,22 @@ export function OnboardingTour() {
   const tourStepIndex = useTourStore((s) => s.tourStepIndex);
   const advance = useTourStore((s) => s.advance);
   const endTour = useTourStore((s) => s.endTour);
+  const { resolvedTheme } = useTheme();
 
   // Read repos count once when tour starts; the steps array stays stable
   // for the duration of one tour run.
   const hasRepos = useRepoStore.getState().repos.length > 0;
+
+  // Concrete colors keyed off the active theme. We can't rely on
+  // `hsl(var(--primary))` because Joyride v3 reads color values through its
+  // own pipeline (probable color math for hover states) and CSS-var strings
+  // don't survive. Also: the project's `--primary` is a contrast color
+  // (near-white in dark mode), not a brand color — picking blue-500 gives a
+  // consistent, theme-agnostic accent for the primary button.
+  const isDark = resolvedTheme === "dark";
+  const tooltipBg = isDark ? "hsl(0 0% 7%)" : "hsl(0 0% 100%)";
+  const tooltipText = isDark ? "hsl(0 0% 98%)" : "hsl(0 0% 3.9%)";
+  const primary = "#3b82f6"; // tailwind blue-500
 
   const steps: Step[] = [
     {
@@ -83,12 +96,15 @@ export function OnboardingTour() {
       continuous
       locale={{ last: "Got it" }}
       options={{
-        // Use the Tailwind --primary CSS var so dark/light themes match.
-        primaryColor: "hsl(var(--primary))",
+        primaryColor: primary,
+        backgroundColor: tooltipBg,
+        arrowColor: tooltipBg,
+        textColor: tooltipText,
+        overlayColor: "rgba(0, 0, 0, 0.6)",
         zIndex: 10000,
-        // v3 default buttons are ['back', 'close', 'primary'] — explicitly include
-        // 'skip' so the user can dismiss the tour at any step. Drop 'back' since
-        // our tour is short and forward-only.
+        // v3 default buttons are ['back', 'close', 'primary'] — explicitly
+        // include 'skip' so the user can dismiss the tour at any step. Drop
+        // 'back' since our tour is short and forward-only.
         buttons: ["skip", "primary"],
       }}
     />

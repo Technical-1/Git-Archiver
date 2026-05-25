@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 import { useSettingsStore } from "@/stores/settings-store";
+import { useTourStore } from "@/stores/tour-store";
 import { toast } from "@/hooks/use-toast";
 import * as commands from "@/lib/commands";
 import type { RateLimitInfo } from "@/lib/types";
@@ -94,6 +95,16 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleReplayTour = () => {
+    onOpenChange(false);
+    // Wait for the Radix DialogContent close animation (~150ms) before
+    // starting the tour, so the spotlight portal doesn't render over a
+    // half-closed dialog.
+    setTimeout(() => {
+      useTourStore.getState().startTour();
+    }, 200);
   };
 
   return (
@@ -237,6 +248,21 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
             </div>
             <p className="text-xs text-muted-foreground">
               Where cloned repos and archives are stored. Existing data is not moved automatically.
+            </p>
+          </div>
+
+          {/* Help */}
+          <div className="space-y-2 pt-2 border-t">
+            <h4 className="text-sm font-medium">Help</h4>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleReplayTour}
+            >
+              Show tutorial again
+            </Button>
+            <p className="text-xs text-muted-foreground">
+              Replays the first-launch walkthrough.
             </p>
           </div>
         </div>

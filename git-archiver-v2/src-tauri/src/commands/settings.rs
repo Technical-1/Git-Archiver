@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use tauri::State;
 
 use crate::core::github_api::RateLimitInfo;
@@ -5,6 +7,61 @@ use crate::db;
 use crate::error::AppError;
 use crate::models::AppSettings;
 use crate::state::AppState;
+
+/// Validate that a data_dir setting is safe to use as the clone root.
+///
+/// Relative paths are always resolved against the app's own data dir at
+/// runtime (lib.rs::run), so they're inherently safe. Absolute paths must
+/// be under the user's home directory — otherwise a compromised renderer
+/// could redirect every future clone to /etc/, /System/, etc.
+///
+/// If the absolute path doesn't yet exist (the worker will create it on
+/// first clone), walk up to the first existing ancestor and check that.
+fn validate_data_dir(data_dir: &str) -> Result<(), AppError> {
+    let path = Path::new(data_dir);
+
+    if path.is_relative() {
+        return Ok(());
+    }
+
+    let home = dirs::home_dir()
+        .ok_or_else(|| AppError::Custom("Could not determine home directory.".to_string()))?;
+    let canonical_home = home
+        .canonicalize()
+        .map_err(|e| AppError::Custom(format!("Cannot resolve home dir: {}", e)))?;
+
+    // Walk up to the first existing ancestor so a not-yet-created data_dir
+    // can still be validated.
+    let mut existing = path;
+    while !existing.exists() {
+        match existing.parent() {
+            Some(p) if !p.as_os_str().is_empty() => existing = p,
+            _ => {
+                return Err(AppError::UserVisible(format!(
+                    "Data directory '{}' has no existing ancestor on disk.",
+                    path.display()
+                )));
+            }
+        }
+    }
+
+    let canonical_existing = existing.canonicalize().map_err(|e| {
+        AppError::Custom(format!(
+            "Cannot resolve '{}': {}",
+            existing.display(),
+            e
+        ))
+    })?;
+
+    if !canonical_existing.starts_with(&canonical_home) {
+        return Err(AppError::UserVisible(format!(
+            "Data directory must be inside your home directory; got '{}'.",
+            path.display()
+        )));
+    }
+
+    Ok(())
+}
 
 /// Load application settings from the database.
 #[tauri::command]
@@ -27,6 +84,8 @@ pub async fn save_settings(
     token: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), AppError> {
+    validate_data_dir(&settings.data_dir)?;
+
     let mut db = state.db.lock().await;
     db::settings::save_app_settings(&mut db, &settings)?;
 

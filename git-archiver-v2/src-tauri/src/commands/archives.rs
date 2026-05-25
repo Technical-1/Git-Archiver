@@ -8,6 +8,44 @@ use crate::error::AppError;
 use crate::models::ArchiveView;
 use crate::state::AppState;
 
+/// Validate that an extract destination is a real directory under the user's
+/// home. Mirrors the threat model of `validate_import_path` in commands::repos
+/// — a renderer-side XSS or malicious dependency could otherwise extract
+/// archive contents to /etc/, /Library/LaunchAgents/, ~/.ssh/, etc. The normal
+/// flow goes through the Tauri directory dialog (Hub #298), but the IPC is
+/// still callable directly.
+fn validate_extract_dest(dest: &Path) -> Result<(), AppError> {
+    let canonical = dest.canonicalize().map_err(|e| {
+        AppError::UserVisible(format!(
+            "Cannot resolve destination '{}': {}",
+            dest.display(),
+            e
+        ))
+    })?;
+
+    if !canonical.is_dir() {
+        return Err(AppError::UserVisible(format!(
+            "Extraction destination '{}' is not a directory.",
+            canonical.display()
+        )));
+    }
+
+    let home = dirs::home_dir()
+        .ok_or_else(|| AppError::Custom("Could not determine home directory.".to_string()))?;
+    let canonical_home = home
+        .canonicalize()
+        .map_err(|e| AppError::Custom(format!("Cannot resolve home dir: {}", e)))?;
+
+    if !canonical.starts_with(&canonical_home) {
+        return Err(AppError::UserVisible(format!(
+            "Extraction destination must be inside your home directory; got '{}'.",
+            canonical.display()
+        )));
+    }
+
+    Ok(())
+}
+
 /// List all archives for a repository, returning frontend-safe views.
 #[tauri::command]
 pub async fn list_archives(
@@ -36,6 +74,8 @@ pub async fn extract_archive(
 
     let archive_path = Path::new(&archive_record.file_path);
     let dest = Path::new(&dest_dir);
+
+    validate_extract_dest(dest)?;
 
     if !archive_path.exists() {
         return Err(AppError::UserVisible(format!(

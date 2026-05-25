@@ -53,6 +53,7 @@ export function AppHeader() {
             size="icon"
             aria-label="Settings"
             onClick={() => setSettingsOpen(true)}
+            data-tour-id="settings-button"
           >
             <Settings className="h-5 w-5" />
           </Button>

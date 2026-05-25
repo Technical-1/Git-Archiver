@@ -52,7 +52,7 @@ export function AddRepoBar() {
   };
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-2" data-tour-id="add-repo-bar">
       <Input
         value={url}
         onChange={(e) => setUrl(e.target.value)}

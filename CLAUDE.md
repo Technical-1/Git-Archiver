@@ -104,7 +104,7 @@ URLs → SQLite (repos table) → data/<repo>.git/ → archives table + versions
 
 ### External Dependencies
 
-No CLI tools required at runtime. Git operations use libgit2 (via `git2` crate). Archive operations use Rust `tar` + `xz2` crates. SQLite is bundled. TLS is rustls (pure Rust).
+No CLI tools required at runtime. Git operations use libgit2 (via `git2` crate). Archive operations use Rust `tar` + `xz2` crates. SQLite is bundled. TLS for HTTP traffic uses rustls (pure Rust); libgit2's HTTPS transport uses statically-linked vendored OpenSSL (via `git2 = { features = ["vendored-openssl"] }`).
 
 ### Security Notes
 
@@ -112,4 +112,4 @@ No CLI tools required at runtime. Git operations use libgit2 (via `git2` crate).
 - URL validation rejects percent-encoded path traversal
 - GraphQL inputs sanitized against injection
 - Archive extraction validates paths against tar-slip
-- rustls TLS (no system OpenSSL dependency)
+- rustls TLS for HTTP traffic; vendored statically-linked OpenSSL for libgit2 HTTPS transport (no *system* OpenSSL dependency, but OpenSSL is present inside the binary)

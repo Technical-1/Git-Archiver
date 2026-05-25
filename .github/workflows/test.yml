@@ -5,6 +5,13 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+  # rustsec/audit-check posts findings as check annotations on the commit;
+  # the default GITHUB_TOKEN doesn't get that scope, so the previous run
+  # failed with "Resource not accessible by integration".
+  checks: write
+
 jobs:
   test:
     runs-on: ubuntu-22.04

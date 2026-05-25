@@ -64,7 +64,19 @@ pub fn run() {
             })?;
 
             // --- Load settings ---
-            let settings = get_app_settings(&conn).unwrap_or_default();
+            // Fail-soft so a corrupt or schema-mismatched DB doesn't brick startup,
+            // but log loudly because the user's data_dir / sync_time / token-presence
+            // preferences would otherwise revert silently.
+            let settings = match get_app_settings(&conn) {
+                Ok(s) => s,
+                Err(e) => {
+                    log::error!(
+                        "Failed to load app settings, falling back to defaults: {}",
+                        e
+                    );
+                    Default::default()
+                }
+            };
             let max_concurrent = settings.max_concurrent_tasks;
 
             // If data_dir is relative, resolve it relative to the app data dir

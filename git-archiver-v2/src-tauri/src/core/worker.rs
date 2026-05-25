@@ -303,18 +303,45 @@ async fn handle_clone_inner(
         std::fs::create_dir_all(parent)?;
     }
 
-    // If the clone path already contains a valid git repo (e.g., from a previous
-    // delete-without-removing-files), reuse it instead of failing.
-    let already_cloned = clone_path.join(".git").exists() || clone_path.join("HEAD").exists();
-
-    if already_cloned {
-        log::info!(
-            "Reusing existing clone at {} for {}/{}",
-            clone_path.display(),
-            repo.owner,
-            repo.name
-        );
+    // If the clone path already contains a git repo (e.g., from a previous
+    // delete-without-removing-files), we'd like to reuse it — but only if
+    // it's actually healthy. A shallow clone left behind by old code, an
+    // interrupted fetch, or any other corruption produces a .git/ that opens
+    // but whose HEAD points to an unreachable object. Reusing such a clone
+    // means every future fetch fails with "object not found" forever, and
+    // the user's "delete + re-add" recovery loop silently keeps the bad
+    // state (Hub #322).
+    let needs_clone = if clone_path.join(".git").exists() || clone_path.join("HEAD").exists() {
+        let healthy = git2::Repository::open(&clone_path)
+            .and_then(|r| r.head().and_then(|h| h.peel_to_commit()).map(|_| ()))
+            .is_ok();
+        if healthy {
+            log::info!(
+                "Reusing existing clone at {} for {}/{}",
+                clone_path.display(),
+                repo.owner,
+                repo.name
+            );
+            false
+        } else {
+            log::warn!(
+                "Existing clone at {} is unhealthy (HEAD unreachable); wiping and re-cloning fresh.",
+                clone_path.display()
+            );
+            std::fs::remove_dir_all(&clone_path).map_err(|e| {
+                AppError::Custom(format!(
+                    "Failed to remove unhealthy clone at {}: {}",
+                    clone_path.display(),
+                    e
+                ))
+            })?;
+            true
+        }
     } else {
+        true
+    };
+
+    if needs_clone {
         // Clone the repository (blocking git2 operation) with progress reporting
         let url = repo.url.clone();
         let dest = clone_path.clone();

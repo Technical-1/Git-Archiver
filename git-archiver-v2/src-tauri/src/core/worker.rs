@@ -36,7 +36,11 @@ fn clean_working_tree(repo_dir: &Path) {
     for entry in match std::fs::read_dir(repo_dir) {
         Ok(entries) => entries,
         Err(e) => {
-            log::warn!("Failed to read dir {} for cleanup: {}", repo_dir.display(), e);
+            log::warn!(
+                "Failed to read dir {} for cleanup: {}",
+                repo_dir.display(),
+                e
+            );
             return;
         }
     } {
@@ -277,8 +281,7 @@ async fn handle_clone_inner(
 
     // If the clone path already contains a valid git repo (e.g., from a previous
     // delete-without-removing-files), reuse it instead of failing.
-    let already_cloned =
-        clone_path.join(".git").exists() || clone_path.join("HEAD").exists();
+    let already_cloned = clone_path.join(".git").exists() || clone_path.join("HEAD").exists();
 
     if already_cloned {
         log::info!(
@@ -323,10 +326,7 @@ async fn handle_clone_inner(
     }
 
     // Fetch repo description from GitHub (non-fatal)
-    match github_client
-        .get_repo_info(&repo.owner, &repo.name)
-        .await
-    {
+    match github_client.get_repo_info(&repo.owner, &repo.name).await {
         Ok(info) => {
             let db = db.lock().await;
             let _ = db::repos::update_repo_metadata(
@@ -579,10 +579,7 @@ async fn handle_update_inner(
     .map_err(|e| AppError::Custom(format!("Pull task panicked: {}", e)))??;
 
     // Refresh repo description from GitHub (non-fatal, runs regardless of updates)
-    match github_client
-        .get_repo_info(&repo.owner, &repo.name)
-        .await
-    {
+    match github_client.get_repo_info(&repo.owner, &repo.name).await {
         Ok(info) => {
             let db = db.lock().await;
             let _ = db::repos::update_repo_metadata(

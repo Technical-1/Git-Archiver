@@ -319,9 +319,18 @@ impl GitHubClient {
                         unknown: false,
                     });
                 } else {
-                    let description = repo_data.get("description").and_then(|v| v.as_str()).map(String::from);
-                    let is_archived = repo_data.get("isArchived").and_then(|v| v.as_bool()).unwrap_or(false);
-                    let is_private = repo_data.get("isPrivate").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let description = repo_data
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
+                    let is_archived = repo_data
+                        .get("isArchived")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let is_private = repo_data
+                        .get("isPrivate")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
 
                     results.push(RepoInfo {
                         description,
@@ -679,7 +688,8 @@ mod tests {
             .mock("POST", "/graphql")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"{
+            .with_body(
+                r#"{
                 "data": {
                     "repo0": {"description":"OK","isArchived":false,"isPrivate":false},
                     "repo1": null
@@ -687,7 +697,8 @@ mod tests {
                 "errors": [
                     {"message":"Rate limit hit for this resource","path":["repo1"]}
                 ]
-            }"#)
+            }"#,
+            )
             .create_async()
             .await;
 
@@ -704,10 +715,22 @@ mod tests {
         assert!(!results[0].unknown);
         assert!(!results[0].not_found);
 
-        assert!(results[1].unknown, "Rate-limited (errored) repo should be unknown");
-        assert!(!results[1].not_found, "Rate-limited repo should NOT be not_found");
+        assert!(
+            results[1].unknown,
+            "Rate-limited (errored) repo should be unknown"
+        );
+        assert!(
+            !results[1].not_found,
+            "Rate-limited repo should NOT be not_found"
+        );
 
-        assert!(results[2].unknown, "Missing-key (no data, no error) repo should be unknown");
-        assert!(!results[2].not_found, "Missing-key repo should NOT be not_found");
+        assert!(
+            results[2].unknown,
+            "Missing-key (no data, no error) repo should be unknown"
+        );
+        assert!(
+            !results[2].not_found,
+            "Missing-key repo should NOT be not_found"
+        );
     }
 }

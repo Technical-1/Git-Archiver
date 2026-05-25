@@ -436,9 +436,13 @@ mod tests {
         }
 
         let dest = tmp.path().join("dest");
-        extract_archive(&archive_path, &dest).expect("extraction should succeed (symlinks just skipped)");
+        extract_archive(&archive_path, &dest)
+            .expect("extraction should succeed (symlinks just skipped)");
 
-        assert!(dest.join("ok.txt").exists(), "regular file should be extracted");
+        assert!(
+            dest.join("ok.txt").exists(),
+            "regular file should be extracted"
+        );
         assert!(
             !dest.join("evil-link").exists() && dest.join("evil-link").symlink_metadata().is_err(),
             "symlink entry should NOT have been created"

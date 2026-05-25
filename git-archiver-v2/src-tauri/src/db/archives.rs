@@ -226,8 +226,17 @@ mod tests {
         let conn = setup_db();
         let repo_id = insert_test_repo(&conn);
 
-        let archive =
-            insert_archive(&conn, repo_id, "a.tar.xz", "/path/a.tar.xz", 100, 10, false, None).unwrap();
+        let archive = insert_archive(
+            &conn,
+            repo_id,
+            "a.tar.xz",
+            "/path/a.tar.xz",
+            100,
+            10,
+            false,
+            None,
+        )
+        .unwrap();
         let archive_id = archive.id.unwrap();
 
         delete_archive(&conn, archive_id).unwrap();
@@ -240,8 +249,17 @@ mod tests {
         let conn = setup_db();
         let repo_id = insert_test_repo(&conn);
 
-        let archive =
-            insert_archive(&conn, repo_id, "a.tar.xz", "/path/a.tar.xz", 100, 10, false, None).unwrap();
+        let archive = insert_archive(
+            &conn,
+            repo_id,
+            "a.tar.xz",
+            "/path/a.tar.xz",
+            100,
+            10,
+            false,
+            None,
+        )
+        .unwrap();
         let archive_id = archive.id.unwrap();
 
         // Delete the repo -- should cascade to archives

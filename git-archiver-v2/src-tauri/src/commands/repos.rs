@@ -33,9 +33,9 @@ fn validate_import_path(path: &Path) -> Result<(), AppError> {
 
     let home = dirs::home_dir()
         .ok_or_else(|| AppError::Custom("Could not determine home directory.".to_string()))?;
-    let canonical_home = home.canonicalize().map_err(|e| {
-        AppError::Custom(format!("Cannot resolve home dir: {}", e))
-    })?;
+    let canonical_home = home
+        .canonicalize()
+        .map_err(|e| AppError::Custom(format!("Cannot resolve home dir: {}", e)))?;
     if !canonical.starts_with(&canonical_home) {
         return Err(AppError::UserVisible(format!(
             "Import path must be inside your home directory; got '{}'.",
@@ -304,7 +304,11 @@ mod tests {
         std::fs::write(&tmp_file, "https://github.com/foo/bar").unwrap();
 
         let result = validate_import_path(&tmp_file);
-        assert!(result.is_ok(), "Should accept .txt under home, got: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Should accept .txt under home, got: {:?}",
+            result
+        );
 
         let _ = std::fs::remove_file(&tmp_file);
     }

@@ -127,11 +127,7 @@ impl TaskManager {
     ///
     /// Returns `true` if the task became inactive within the timeout,
     /// `false` if it was still active when the timeout elapsed.
-    pub async fn cancel_and_wait(
-        &self,
-        repo_id: i64,
-        timeout: std::time::Duration,
-    ) -> bool {
+    pub async fn cancel_and_wait(&self, repo_id: i64, timeout: std::time::Duration) -> bool {
         // Clone the token without removing the entry. The worker's running
         // task holds another clone via get_cancellation_token() and is
         // either checking it or awaiting an operation that respects it.
@@ -303,7 +299,10 @@ mod tests {
             .await;
         assert!(acknowledged, "Worker should have acknowledged within 1s");
         assert!(!manager.is_active(7));
-        assert!(token.is_cancelled(), "Cancellation token should have been signalled");
+        assert!(
+            token.is_cancelled(),
+            "Cancellation token should have been signalled"
+        );
     }
 
     #[tokio::test]
@@ -329,7 +328,10 @@ mod tests {
         let acknowledged = manager
             .cancel_and_wait(99, std::time::Duration::from_secs(1))
             .await;
-        assert!(acknowledged, "No-op cancel_and_wait should return true immediately");
+        assert!(
+            acknowledged,
+            "No-op cancel_and_wait should return true immediately"
+        );
     }
 
     #[tokio::test]

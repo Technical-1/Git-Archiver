@@ -42,8 +42,18 @@ pub async fn save_settings(
         let entry =
             keyring::Entry::new("git-archiver", "github-token").map_err(AppError::Keyring)?;
         if token_value.is_empty() {
-            // Empty string means clear the token
-            let _ = entry.delete_credential();
+            // Empty string means clear the token. `NoEntry` is a benign no-op
+            // (nothing to clear); other errors mean the keychain is locked or
+            // access was denied — propagate so the user knows the clear failed
+            // and the GitHub client may still be using the old token at runtime.
+            match entry.delete_credential() {
+                Ok(()) => {}
+                Err(keyring::Error::NoEntry) => {}
+                Err(e) => {
+                    log::warn!("Failed to clear GitHub token from keychain: {}", e);
+                    return Err(AppError::Keyring(e));
+                }
+            }
         } else {
             entry.set_password(token_value).map_err(AppError::Keyring)?;
         }

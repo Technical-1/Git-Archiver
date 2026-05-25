@@ -16,10 +16,7 @@ use crate::state::AppState;
 /// - **None (spring-forward gap):** the wall clock skips a time (e.g. 2:30
 ///   doesn't exist). Shift the naive time forward by one hour so it lands
 ///   in the post-gap zone, then resolve from there.
-fn local_naive_to_instant(
-    naive: NaiveDateTime,
-    fallback: DateTime<Local>,
-) -> DateTime<Local> {
+fn local_naive_to_instant(naive: NaiveDateTime, fallback: DateTime<Local>) -> DateTime<Local> {
     match Local.from_local_datetime(&naive) {
         chrono::LocalResult::Single(dt) => dt,
         chrono::LocalResult::Ambiguous(earlier, _later) => earlier,
@@ -39,14 +36,12 @@ fn duration_until(target_time: NaiveTime) -> std::time::Duration {
     let now = Local::now();
 
     let today_naive = now.date_naive().and_time(target_time);
-    let today_target =
-        local_naive_to_instant(today_naive, now + chrono::Duration::hours(1));
+    let today_target = local_naive_to_instant(today_naive, now + chrono::Duration::hours(1));
 
     let next = if now < today_target {
         today_target
     } else {
-        let tomorrow_naive =
-            (now.date_naive() + chrono::Duration::days(1)).and_time(target_time);
+        let tomorrow_naive = (now.date_naive() + chrono::Duration::days(1)).and_time(target_time);
         local_naive_to_instant(tomorrow_naive, now + chrono::Duration::days(1))
     };
 

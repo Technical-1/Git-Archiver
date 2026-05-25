@@ -45,13 +45,9 @@ fn validate_data_dir(data_dir: &str) -> Result<(), AppError> {
         }
     }
 
-    let canonical_existing = existing.canonicalize().map_err(|e| {
-        AppError::Custom(format!(
-            "Cannot resolve '{}': {}",
-            existing.display(),
-            e
-        ))
-    })?;
+    let canonical_existing = existing
+        .canonicalize()
+        .map_err(|e| AppError::Custom(format!("Cannot resolve '{}': {}", existing.display(), e)))?;
 
     if !canonical_existing.starts_with(&canonical_home) {
         return Err(AppError::UserVisible(format!(

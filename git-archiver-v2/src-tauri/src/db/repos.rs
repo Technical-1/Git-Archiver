@@ -40,17 +40,29 @@ fn row_to_repo(row: &Row) -> Result<Repository, rusqlite::Error> {
     let local_path: Option<String> = row.get(7)?;
     let last_checked_str: Option<String> = row.get(8)?;
     let last_updated_str: Option<String> = row.get(9)?;
-    let error_message: Option<String> = row.get(10)?;
+    let mut error_message: Option<String> = row.get(10)?;
     let created_at_str: String = row.get(11)?;
 
+    // Fail-soft on unknown status strings: log + coerce to Error so the app
+    // keeps working if the DB schema is newer than the binary (e.g. user
+    // downgraded after a future migration added a status variant). To avoid
+    // making this look indistinguishable from a real failure, surface the
+    // unknown value via error_message in memory — the user sees a clear hint
+    // in the UI tooltip rather than a generic Error row.
     let status = match parse_status(&status_str) {
         Ok(s) => s,
         Err(_) => {
             log::warn!(
-                "Unknown repo status '{}' for repo id={}, falling back to Error",
+                "Unknown repo status '{}' for repo id={} — possibly from a newer DB schema; coercing to Error.",
                 status_str,
                 id
             );
+            error_message.get_or_insert_with(|| {
+                format!(
+                    "Status '{}' is not recognized by this build (probably from a newer DB schema).",
+                    status_str
+                )
+            });
             RepoStatus::Error
         }
     };

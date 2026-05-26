@@ -1,67 +1,101 @@
-# Project Q&A Knowledge Base
+# Project Q&A
 
 ## Overview
 
-Git Archiver is a cross-platform desktop application I built to preserve GitHub repositories before they disappear. It clones repositories, tracks their status via the GitHub API, and creates versioned compressed archives whenever updates are detected. The v2.0.0 release is a complete rewrite from Python/PyQt5 to Rust/Tauri/React, delivering native performance, cross-platform binaries, and a modern UI.
+Git Archiver is a cross-platform desktop application I built to preserve GitHub repositories before they disappear. It clones repositories, tracks their status via the GitHub API, and creates versioned compressed archives whenever updates are detected. The v2.0.0 release is a complete rewrite from Python/PyQt5 to Rust/Tauri/React, producing ~5-7MB native binaries instead of a ~150MB+ packaged Python interpreter.
+
+## Problem Solved
+
+GitHub repositories disappear all the time — owners delete them, accounts get suspended, organizations go private, or projects are archived and eventually lost. If you depend on a repo (a fork you reference, a dependency you vendor, an old tutorial you keep coming back to), you need a local copy that updates itself and keeps history. Git Archiver tracks a list of repos, fetches them on a schedule, and saves a compressed `.tar.xz` snapshot of every change so you have a versioned local archive instead of a single mutable clone.
+
+## Target Users
+
+- **Developers preserving dependencies** — anyone who pulls in code from GitHub and wants insurance against repos vanishing
+- **Researchers and archivists** — people studying open-source projects who need stable, versioned snapshots
+- **Self-hosters** — users who want a local backup of their own repos and starred projects without relying on GitHub's availability
 
 ## Key Features
 
-- **Concurrent Task Engine**: Semaphore-controlled worker pool with per-task cancellation, deduplication, and configurable concurrency (1-10 parallel operations)
-- **Incremental Archives**: MD5-based file change detection creates archives containing only modified files, achieving 70-90% space savings
-- **Batch Status Detection**: GraphQL queries check up to 100 repositories per API call, detecting archived/deleted repos efficiently
-- **OS Keychain Integration**: GitHub tokens stored securely in macOS Keychain, Windows Credential Manager, or Linux Secret Service
-- **Legacy Migration**: One-click import from the v1.x Python JSON database with automatic archive scanning
-- **Auto-Updater**: Built-in update mechanism checks GitHub Releases for new versions with Ed25519 signature verification
+### Concurrent task engine
+Semaphore-controlled worker pool with per-task cancellation, deduplication, and configurable concurrency (1-10 parallel operations). Implemented in `git-archiver-v2/src-tauri/src/core/task_manager.rs` and `worker.rs`.
+
+### Incremental archives
+MD5-based file change detection creates archives containing only modified files, achieving 70-90% space savings on actively developed repos. Hashes are stored in the `file_hashes` table; see `core/hasher.rs` and `core/archive.rs`.
+
+### Batch status detection
+GraphQL queries check up to 100 repositories per API call, detecting archived/deleted repos without burning through REST rate limits. See `core/github_api.rs`.
+
+### OS keychain integration
+GitHub tokens are stored in the platform credential store (macOS Keychain, Windows Credential Manager, Linux Secret Service) via the `keyring` crate — never on disk in plaintext.
+
+### Legacy migration
+One-click import from the v1.x Python JSON database, including a scan of the data directory to register any pre-existing archives.
+
+### Auto-updater
+Tauri's updater plugin checks GitHub Releases for new versions and verifies Ed25519 signatures before installing.
 
 ## Technical Highlights
 
-### Complete Rewrite: Python to Rust
-The original application was a PyQt5 desktop app with a JSON file database. I rewrote the entire application in Rust with a Tauri v2 shell and React frontend. The Rust backend handles all business logic — git operations via libgit2, GitHub API calls, archive creation, and SQLite persistence. The React frontend uses shadcn/ui components with Zustand for state management. This produced ~5-7MB cross-platform binaries compared to Python's ~150MB+ when packaged.
+### Async task queue with cancellation
+The worker is a channel-based queue where IPC commands enqueue tasks and a long-running `tokio::spawn`'d loop consumes them. A tokio semaphore caps concurrency; each task carries a `CancellationToken` so a single "stop all" call propagates to every in-flight operation. A `DashMap` of in-flight repo IDs handles deduplication so the same clone can't be enqueued twice. Progress flows back to the frontend through Tauri events, keeping the React activity log live without polling.
 
-### Async Task Queue Architecture
-I designed a channel-based task queue where frontend actions enqueue tasks through Tauri IPC commands, and a long-running worker loop consumes them with semaphore-controlled concurrency. Each task gets a cancellation token for graceful stop-all support. The deduplication system prevents duplicate clone/update operations from being enqueued for the same repository. The worker emits Tauri events that the frontend listens to for real-time progress updates in the activity log.
+### Incremental tar.xz archives
+Each archive run hashes every file in the repo (excluding `.git/`) and compares against hashes stored in SQLite from the prior run. Only changed files are added to the new `.tar.xz`. This is what produces the 70-90% storage savings on repos that update frequently with small diffs. See `core/hasher.rs` and `db/file_hashes.rs`.
 
-### Cross-Compilation Challenges
-Building for 4 platforms (macOS ARM64, macOS x86_64, Windows, Linux) revealed interesting dependency issues. The `openssl-sys` crate couldn't cross-compile from ARM64 to x86_64 on macOS CI runners. I solved this by switching `reqwest` to `rustls-tls` (pure Rust TLS) and enabling `vendored-openssl` for `git2`'s libgit2 dependency. These changes eliminated all system OpenSSL dependencies.
+### Cross-compilation without system OpenSSL
+The original build broke when CI tried to cross-compile from ARM64 macOS to x86_64 — `openssl-sys` doesn't cross-compile cleanly. The fix was to drop system TLS entirely: `reqwest` uses `rustls-tls`, and `git2` enables `vendored-openssl` so libgit2 builds its own copy. The crate set now has zero system OpenSSL linkage on any target.
 
-### Security-Conscious Design
-Several security measures are built into the codebase: GitHub tokens use OS keychain storage instead of plaintext files. URL validation rejects percent-encoded path traversal attempts. The GraphQL API client sanitizes repository owner/name inputs against injection. Archive extraction validates paths to prevent tar-slip attacks. All of these have dedicated test coverage.
+### Security hardening on untrusted inputs
+URL validation rejects percent-encoded path traversal attempts (`core/url.rs`). The GraphQL client sanitizes owner/name fields before interpolating them into queries (`core/github_api.rs`). Archive extraction validates each tar entry's path to prevent tar-slip attacks (`core/archive.rs`). All three have dedicated unit tests.
 
-## Development Story
+## Engineering Decisions
 
-- **Timeline**: The v1.x Python version was built incrementally over several months. The v2.0.0 Rust/Tauri rewrite was planned as 12 milestones with 37 tasks and executed systematically.
-- **Hardest Part**: Getting the async task queue right — coordinating Tauri's async runtime, tokio channels, semaphore permits, and cancellation tokens while keeping the frontend responsive via event streaming.
-- **Lessons Learned**: Vendoring native dependencies (OpenSSL, SQLite, libgit2) is essential for cross-platform CI builds. Also, rustls is almost always preferable to native TLS for cross-compilation.
-- **Future Plans**: Apple code signing and notarization for macOS distribution, GitLab/Bitbucket support, archive deduplication with content-addressable storage.
+### Rust/Tauri instead of staying on Python/PyQt5
+- **Constraint**: Distribution size and cross-platform builds. The v1.x PyQt5 app shipped at ~150MB+ once the interpreter and Qt were bundled, and packaging for Windows/Linux from a Mac dev box was painful.
+- **Options**: Stay on Python and ship via PyInstaller; switch to Electron; switch to Tauri.
+- **Choice**: Tauri v2 with a Rust backend and React frontend.
+- **Why**: Binary size dropped to ~5-7MB. Tauri provides the auto-updater, OS keychain, and cross-platform packaging out of the box, which would have been third-party glue in Python or Electron. Rust also gave proper error types and structured concurrency for the task queue.
+
+### SQLite instead of the v1.x JSON file
+- **Constraint**: The v1.x JSON store needed hand-rolled atomic writes and corruption recovery scripts.
+- **Options**: Keep JSON with better locking; move to SQLite; move to an embedded KV store like sled.
+- **Choice**: SQLite via `rusqlite` with the bundled feature so there's no system dependency.
+- **Why**: ACID transactions, schema migrations, and cascade deletes for free. The migration command in `commands/migrate.rs` reads the old JSON and imports it cleanly.
+
+### libgit2 instead of shelling out to git
+- **Constraint**: A bundled desktop app shouldn't require users to have `git` on their PATH.
+- **Options**: Subprocess `git` CLI; libgit2 via `git2` crate; raw HTTP smart-protocol implementation.
+- **Choice**: `git2` with vendored OpenSSL.
+- **Why**: No external dependency, structured `git2::Error` instead of parsing stderr, and credential callbacks let token auth flow through without polluting environment variables.
+
+### rustls instead of native TLS
+- **Constraint**: Cross-compiling from ARM64 macOS runners to x86_64 kept failing on `openssl-sys`.
+- **Options**: Install OpenSSL for each target in CI; use native-tls (Schannel/SecureTransport/OpenSSL); use rustls.
+- **Choice**: rustls for `reqwest`, vendored OpenSSL only for libgit2.
+- **Why**: One pure-Rust TLS stack works identically on every target with no system linking. CI builds went from flaky to deterministic.
 
 ## Frequently Asked Questions
 
 ### How does the concurrent task system work?
-Tasks (clone, update, refresh) are enqueued into an MPSC channel via Tauri IPC commands. A background worker loop receives tasks and acquires a tokio semaphore permit before executing each one. The semaphore limits concurrency to a configurable maximum (1-10). Each task gets a `CancellationToken` that can be triggered for graceful stop-all. The deduplication layer prevents the same repository from being cloned/updated multiple times simultaneously.
-
-### Why did you rewrite from Python to Rust?
-Three main reasons: (1) Distribution — Python desktop apps require bundling the interpreter (~150MB+), while Tauri produces ~5-7MB native binaries. (2) Performance — Rust's async runtime with libgit2 is significantly faster than Python subprocess calls to git CLI. (3) Features — Tauri v2 provides built-in auto-updater, OS keychain access, and proper cross-platform packaging that would require many third-party libraries in Python.
+Tasks (clone, update, refresh) are enqueued into an MPSC channel from Tauri IPC commands. A background worker loop receives tasks and acquires a tokio semaphore permit before executing each one — the semaphore caps concurrency at a user-configurable 1-10. Each task holds a `CancellationToken` so the "stop all" button can interrupt every in-flight operation. A `DashMap` of active repo IDs prevents the same repo from being queued twice at once.
 
 ### How does the incremental archive feature work?
-When creating an archive, the system computes MD5 hashes of all files in the repository and stores them in the SQLite database. On subsequent archives, it compares current hashes against stored ones and only includes files whose hashes have changed. For actively developed projects with frequent small changes, this reduces archive storage by 70-90%.
-
-### Why SQLite instead of the original JSON database?
-The v1.x JSON database required manual locking, atomic write patterns, and recovery scripts for corrupted files. SQLite provides ACID transactions, proper schema migrations, foreign key cascade deletes, and concurrent-safe access out of the box. The migration from JSON to SQLite is handled by a dedicated command in the app.
+On each archive run, the app walks the repo (excluding `.git/`), computes MD5 hashes per file, and compares them against the hashes stored in SQLite from the previous run. Only files whose hashes changed are added to the new `.tar.xz`. For repos with frequent small changes, archives end up 70-90% smaller than full snapshots.
 
 ### How does the GitHub API integration handle rate limits?
-The app uses GraphQL batch queries to check up to 100 repositories in a single API call (vs one per REST call). The status bar displays current rate limit usage. With a personal access token (stored in OS keychain), the limit is 5,000 requests/hour vs 60/hour unauthenticated.
+The app uses GraphQL batch queries to check up to 100 repositories in a single call, instead of one REST request per repo. The status bar shows the current rate limit budget. With a personal access token stored in the OS keychain, the budget is 5,000 requests/hour; unauthenticated it's 60/hour, which is why setting a token is the first thing the settings dialog asks for.
 
-### What was the most challenging part of the rewrite?
-Getting cross-platform CI builds working. The `macos-latest` GitHub Actions runner is ARM64, but building the x86_64 macOS target requires cross-compilation. Dependencies like `openssl-sys` and `libgit2-sys` don't cross-compile cleanly, so I had to switch to pure-Rust TLS (rustls) and vendor OpenSSL for libgit2.
+### How does the auto-updater verify downloads?
+Tauri's updater plugin checks GitHub Releases for newer versions. Release artifacts are signed with Ed25519 minisign keys — the public key is embedded in the app at build time, and the private key lives in a GitHub Actions secret used only by the release workflow. Updates that fail signature verification are rejected before install.
 
-### How does the auto-updater work?
-Tauri's updater plugin checks GitHub Releases for new versions. Release artifacts are signed with Ed25519 minisign keys — the public key is embedded in the app, and the private key is a GitHub Actions secret. When an update is found, the app downloads and verifies the signature before installing.
+### Can I migrate from the v1.x Python version?
+Yes. The settings dialog has a migration tool that reads `cloned_repos.json`, imports all entries with their metadata into SQLite, and scans the data directory so any existing `.tar.xz` archives become first-class archive records.
 
-### Can I migrate from the old Python version?
-Yes. The Settings dialog includes a migration tool that reads the v1.x `cloned_repos.json` file, parses all repository entries with their metadata, and imports them into the SQLite database. It also scans the data directory for existing archives and creates records for them.
+### Where are tokens and data stored?
+GitHub tokens go into the OS keychain (`keyring` crate). Repo metadata, archive records, and file hashes live in SQLite under the platform's standard data directory. Cloned repos are bare clones (`data/<owner>_<repo>.git/`) and archives are timestamped `.tar.xz` files under `versions/`.
 
-### What platforms are supported?
-macOS (Apple Silicon and Intel), Windows (64-bit), and Linux (x86_64). Pre-built binaries are available as `.dmg`, `.exe`/`.msi`, `.deb`, `.rpm`, and `.AppImage` on the GitHub Releases page.
+### What platforms have prebuilt binaries?
+macOS (Apple Silicon and Intel), Windows x86_64, and Linux x86_64. Release artifacts include `.dmg` and `.app.tar.gz` for macOS, `.exe` (NSIS) and `.msi` for Windows, and `.deb`, `.rpm`, and `.AppImage` for Linux — published on the GitHub Releases page.
 
-### What would you improve next?
-Apple code signing and notarization to eliminate macOS Gatekeeper warnings. Support for GitLab and Bitbucket repositories. Content-addressable archive storage to deduplicate identical files across different repository versions.
+### Why bare clones instead of full working trees?
+The point is archival, not active development. Bare clones skip the working directory entirely, halving disk usage and making fetch-only updates faster. If you need the working tree, extract the archive or `git clone` from the bare repo locally.

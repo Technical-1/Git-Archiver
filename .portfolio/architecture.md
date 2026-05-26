@@ -21,6 +21,8 @@ flowchart TB
     subgraph Workers["Async Worker System"]
         TaskMgr["TaskManager<br/>Semaphore Queue"]
         WorkerLoop["Worker Loop<br/>Task Consumer"]
+        Scheduler["Daily Scheduler<br/>DST-aware update-all"]
+        Tray["System Tray<br/>Open / Last sync / Quit"]
     end
 
     subgraph External["External Services"]
@@ -53,6 +55,10 @@ flowchart TB
     Core --> GitHubGraphQL
     Commands --> Keychain
 
+    Scheduler --> |"enqueue update-all"| TaskMgr
+    Scheduler --> |"updates 'Last sync'"| Tray
+    Tray --> |"Open / Quit"| App
+
     DB --> SQLite
     Core --> DataDir
     Core --> Archives
@@ -64,8 +70,8 @@ flowchart TB
 flowchart LR
     subgraph Input["Input Sources"]
         URL["Single URL"]
-        BulkFile["Text File<br/>(Bulk Import)"]
-        LegacyJSON["v1.x JSON<br/>(Migration)"]
+        BulkFile["Text File<br/>(.txt / .csv / .md)"]
+        Daily["Daily Scheduler<br/>(configurable time)"]
     end
 
     subgraph Processing["Async Processing Pipeline"]
@@ -89,7 +95,7 @@ flowchart LR
 
     URL --> Validate
     BulkFile --> Validate
-    LegacyJSON --> Validate
+    Daily --> Enqueue
     Validate --> Enqueue
     Enqueue --> Worker
     Worker --> |"New Repo"| Clone
@@ -112,11 +118,10 @@ flowchart LR
 ### Rust Backend
 
 #### Command Handlers (`commands/`)
-- **`repos.rs`**: Add, list, delete repositories. Bulk import from text files with URL validation.
-- **`tasks.rs`**: Enqueue clone/update tasks via TaskManager. Update-all triggers batch processing. Stop-all cancels in-flight tasks.
-- **`archives.rs`**: List archives for a repository, extract archives to a target directory, delete individual archives.
-- **`settings.rs`**: Load/save app settings (data directory, concurrency). Manage GitHub token via OS keychain. Check API rate limits.
-- **`migrate.rs`**: Parse v1.x `cloned_repos.json` format, import repositories, scan for existing archives on disk.
+- **`repos.rs`**: Add, list, delete repositories. Bulk import from `.txt` / `.csv` / `.md` files. Import path is canonicalized and constrained to the user's home directory with an extension allowlist to block renderer-coerced reads of arbitrary files.
+- **`tasks.rs`**: Enqueue clone/update tasks via TaskManager. Update-all triggers batch processing. Stop-all cancels in-flight tasks via per-task cancellation tokens.
+- **`archives.rs`**: List archives for a repository, extract to a target directory, delete individual archives, and pull README text from either the current bare clone or a stored archive for the in-app README viewer.
+- **`settings.rs`**: Load/save app settings (data directory, concurrency, daily sync time). Manage GitHub token via OS keychain. Check API rate limits. Pushes new sync times into the scheduler via a `tokio::watch` channel so changes apply without restart.
 
 #### Core Business Logic (`core/`)
 - **`git.rs`**: Clone and fetch operations using libgit2. Bare repository support with credential callbacks for authenticated access.
@@ -124,7 +129,8 @@ flowchart LR
 - **`archive.rs`**: Create/extract `.tar.xz` archives. Incremental archives using file hash comparison. Tar-slip path traversal protection on extraction.
 - **`hasher.rs`**: MD5 directory hashing for incremental archive detection. Excludes `.git/` directories.
 - **`task_manager.rs`**: MPSC channel-based task queue with tokio semaphore for concurrency control. Per-task cancellation tokens. Deduplication prevents duplicate clone/update operations.
-- **`worker.rs`**: Long-running async loop that consumes tasks from the channel. Acquires semaphore permits, executes operations, emits Tauri events for frontend progress updates.
+- **`worker.rs`**: Long-running async loop that consumes tasks from the channel. Acquires semaphore permits, executes operations, emits Tauri events for frontend progress updates. Health-checks an existing bare clone before reuse so a corrupt local directory falls back to a fresh clone instead of failing fetches.
+- **`scheduler.rs`**: DST-aware daily scheduler using `tokio::select!` over a sleep timer and a `watch::Receiver<Option<NaiveTime>>`. Handles spring-forward gaps by shifting forward one hour and fall-back ambiguity by picking the earlier instant; sleeps until the next firing or wakes immediately when the user changes the sync time.
 - **`url.rs`**: GitHub URL validation, normalization (lowercase, strip trailing slash/`.git`), and owner/repo extraction. Rejects percent-encoded path traversal attempts.
 
 #### Database Layer (`db/`)
@@ -144,7 +150,8 @@ flowchart LR
 - **`add-repo-bar.tsx`**: URL input with single-add and bulk import (file picker) support.
 - **`activity-log.tsx`**: Scrollable log that listens to Tauri events for real-time operation feedback.
 - **`status-bar.tsx`**: Displays active task count and GitHub API rate limit status.
-- **`dialogs/`**: Settings dialog (data directory, concurrency, GitHub token), archive viewer, and migration wizard.
+- **`onboarding-tour.tsx`**: React Joyride wrapper that runs a first-launch spotlight tour over real DOM targets (`data-tour-id` attributes on the add bar, settings cog, and row actions). State persisted via a dedicated Zustand `tour-store`.
+- **`dialogs/`**: Settings dialog (data directory, concurrency, daily sync time, GitHub token, "Show tutorial again"), archive viewer with extract/delete, and README viewer for both live clones and archived snapshots.
 
 ## Key Architecture Decisions
 
@@ -165,6 +172,15 @@ Carried over from v1.x — each archive stores MD5 hashes of all files in the da
 
 ### 6. OS Keychain for Token Storage
 GitHub tokens are stored in the OS keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service) via the `keyring` crate, rather than in a plaintext config file. This is both more secure and follows platform conventions.
+
+### 7. Stay-Resident Tray App Instead of Quit-on-Close
+Closing the window calls `api.prevent_close()` and hides the window instead of quitting; on macOS the activation policy flips to `Accessory` so the dock icon disappears. The system tray menu becomes the persistent surface, with a live "Last sync: …" item updated by the scheduler. The trade-off was added complexity (a custom exit path for the tray Quit item, since the global `ExitRequested` handler unconditionally prevents exit), but for an archive tool that needs to fire scheduled syncs in the background, requiring the user to keep the window open would defeat the purpose.
+
+### 8. DST-Aware Daily Scheduler Using `tokio::select!` and `watch`
+The daily auto-sync needed two properties that a naive `sleep_until` loop can't provide: instant reactivity when the user changes the sync time, and correct behavior across DST transitions. The implementation uses `tokio::select!` to race a `sleep` against a `watch::Receiver`, so settings changes preempt the sleep and reschedule. DST is handled explicitly in `local_naive_to_instant`: ambiguous fall-back times pick the earlier instant (so a 1:30 sync fires once), and nonexistent spring-forward times shift forward by one hour into the post-gap zone.
+
+### 9. Statically Linked liblzma for macOS Hardened Runtime
+Notarized macOS builds with Hardened Runtime can't load the dynamic `liblzma.dylib` shipped by Homebrew (the OS resolver rejects the unsigned dylib at runtime). The fix was `xz2 = { version = "0.1", features = ["static"] }`, which compiles liblzma into the binary instead of linking dynamically. This trades a slightly larger binary for an archive feature that actually works on signed, distributed builds.
 
 ## Concurrency Model
 
@@ -214,3 +230,5 @@ archives: id, repo_id (FK), file_path, file_size, file_count, archive_type, crea
 file_hashes: id, repo_id (FK), file_path, hash, updated_at
 settings: key, value
 ```
+
+Settings keys are allowlisted in `db/settings.rs`: `data_dir`, `archive_format`, `max_concurrent_tasks`, and `sync_time` (HH:MM string or null). The GitHub token is deliberately not a settings row — it lives in the OS keychain instead.

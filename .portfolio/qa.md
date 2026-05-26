@@ -28,11 +28,11 @@ GraphQL queries check up to 100 repositories per API call, detecting archived/de
 ### OS keychain integration
 GitHub tokens are stored in the platform credential store (macOS Keychain, Windows Credential Manager, Linux Secret Service) via the `keyring` crate — never on disk in plaintext.
 
-### Legacy migration
-One-click import from the v1.x Python JSON database, including a scan of the data directory to register any pre-existing archives.
+### Daily auto-sync with a tray-resident background process
+A configurable daily time triggers `update_all` automatically. Closing the window hides the app to the system tray instead of quitting; the tray menu shows the last sync time and is the persistent surface for an app that's meant to run quietly in the background. Implemented across `core/scheduler.rs` and `tray.rs`.
 
-### Auto-updater
-Tauri's updater plugin checks GitHub Releases for new versions and verifies Ed25519 signatures before installing.
+### Signed and notarized releases
+Tauri's updater plugin checks GitHub Releases for new versions and verifies Ed25519 signatures before installing. macOS builds are code-signed with a Developer ID Application certificate and notarized via Apple's `notarytool` so they install without Gatekeeper warnings.
 
 ## Technical Highlights
 
@@ -46,7 +46,13 @@ Each archive run hashes every file in the repo (excluding `.git/`) and compares 
 The original build broke when CI tried to cross-compile from ARM64 macOS to x86_64 — `openssl-sys` doesn't cross-compile cleanly. The fix was to drop system TLS entirely: `reqwest` uses `rustls-tls`, and `git2` enables `vendored-openssl` so libgit2 builds its own copy. The crate set now has zero system OpenSSL linkage on any target.
 
 ### Security hardening on untrusted inputs
-URL validation rejects percent-encoded path traversal attempts (`core/url.rs`). The GraphQL client sanitizes owner/name fields before interpolating them into queries (`core/github_api.rs`). Archive extraction validates each tar entry's path to prevent tar-slip attacks (`core/archive.rs`). All three have dedicated unit tests.
+URL validation rejects percent-encoded path traversal attempts (`core/url.rs`). The GraphQL client sanitizes owner/name fields before interpolating them into queries (`core/github_api.rs`). Archive extraction validates each tar entry's path to prevent tar-slip attacks (`core/archive.rs`). Bulk-import paths are canonicalized, constrained to the user's home directory, and restricted to an extension allowlist to block renderer-coerced reads of arbitrary files (`commands/repos.rs::validate_import_path`). All four have dedicated unit tests.
+
+### DST-aware daily scheduler
+The daily auto-sync uses `tokio::select!` to race a sleep timer against a `watch::Receiver<Option<NaiveTime>>`, so changing the sync time in settings preempts the current sleep and reschedules instantly — no restart, no missed window. DST is handled explicitly in `local_naive_to_instant`: ambiguous fall-back times pick the earlier instant (a 1:30 sync fires once across the rewind), nonexistent spring-forward times shift forward one hour into the post-gap zone. The scheduler updates the system tray's "Last sync" item after every run.
+
+### Statically linked liblzma for notarized macOS builds
+Notarized macOS builds with Hardened Runtime can't load the dynamic `liblzma.dylib` shipped by Homebrew — the OS dyld resolver rejects the unsigned dylib at runtime, which manifested as a crash whenever the app tried to create a `.tar.xz` archive. The fix was the `static` feature on `xz2`, which compiles liblzma into the binary. Builds got a few hundred KB heavier; archives now actually work on distributed signed builds.
 
 ## Engineering Decisions
 
@@ -71,8 +77,14 @@ URL validation rejects percent-encoded path traversal attempts (`core/url.rs`). 
 ### rustls instead of native TLS
 - **Constraint**: Cross-compiling from ARM64 macOS runners to x86_64 kept failing on `openssl-sys`.
 - **Options**: Install OpenSSL for each target in CI; use native-tls (Schannel/SecureTransport/OpenSSL); use rustls.
-- **Choice**: rustls for `reqwest`, vendored OpenSSL only for libgit2.
+- **Choice**: rustls for `reqwest`, vendored + statically linked OpenSSL only for libgit2.
 - **Why**: One pure-Rust TLS stack works identically on every target with no system linking. CI builds went from flaky to deterministic.
+
+### Tray-resident background process instead of quit-on-close
+- **Constraint**: A daily auto-sync is useless if the user has to leave the window open. The app needs to keep running after the window closes.
+- **Options**: Quit-on-close like a typical desktop app; spin off a separate background daemon process; keep one process alive and hide the window.
+- **Choice**: Single process, window-close hides instead of quits, system tray menu as the persistent surface. On macOS the dock icon is toggled via `ActivationPolicy::Accessory`.
+- **Why**: A separate daemon would have meant duplicating the SQLite/scheduler/keychain plumbing and inventing IPC between processes. Keeping one process is simpler, lets the scheduler and worker share state directly, and matches user expectation for tray-resident utilities like Dropbox or 1Password's helper.
 
 ## Frequently Asked Questions
 
@@ -86,16 +98,22 @@ On each archive run, the app walks the repo (excluding `.git/`), computes MD5 ha
 The app uses GraphQL batch queries to check up to 100 repositories in a single call, instead of one REST request per repo. The status bar shows the current rate limit budget. With a personal access token stored in the OS keychain, the budget is 5,000 requests/hour; unauthenticated it's 60/hour, which is why setting a token is the first thing the settings dialog asks for.
 
 ### How does the auto-updater verify downloads?
-Tauri's updater plugin checks GitHub Releases for newer versions. Release artifacts are signed with Ed25519 minisign keys — the public key is embedded in the app at build time, and the private key lives in a GitHub Actions secret used only by the release workflow. Updates that fail signature verification are rejected before install.
+Tauri's updater plugin checks GitHub Releases for newer versions. Release artifacts are signed with Ed25519 minisign keys — the public key is embedded in the app at build time, and the (passwordless) private key lives in a GitHub Actions secret used only by the release workflow. macOS binaries are additionally code-signed with a Developer ID Application certificate and notarized via `notarytool`. Updates that fail signature verification are rejected before install.
 
-### Can I migrate from the v1.x Python version?
-Yes. The settings dialog has a migration tool that reads `cloned_repos.json`, imports all entries with their metadata into SQLite, and scans the data directory so any existing `.tar.xz` archives become first-class archive records.
+### Does the app keep running after I close the window?
+Yes — that's the whole point of the daily sync feature. Closing the window hides the app to the system tray instead of quitting. The tray menu has "Open Git Archiver", a live "Last sync: …" line that the scheduler updates after each run, and an explicit Quit. On macOS the dock icon hides while the window is closed and reappears when you reopen it.
+
+### How does the daily auto-sync handle daylight saving?
+The scheduler uses `tokio::select!` to race a sleep against a `watch::Receiver`, so editing the sync time in settings preempts the sleep immediately. For DST, `chrono::Local::from_local_datetime` returns `Ambiguous` on fall-back days and `None` for spring-forward gaps. The scheduler picks the earlier instant for ambiguous times (so a 1:30 sync fires once across the rewind) and shifts forward one hour for nonexistent times.
 
 ### Where are tokens and data stored?
-GitHub tokens go into the OS keychain (`keyring` crate). Repo metadata, archive records, and file hashes live in SQLite under the platform's standard data directory. Cloned repos are bare clones (`data/<owner>_<repo>.git/`) and archives are timestamped `.tar.xz` files under `versions/`.
+GitHub tokens go into the OS keychain (`keyring` crate). Repo metadata, archive records, file hashes, and settings live in SQLite under the platform's standard data directory. Cloned repos are bare clones (`data/<owner>_<repo>.git/`) and archives are timestamped `.tar.xz` files under `versions/`.
 
 ### What platforms have prebuilt binaries?
-macOS (Apple Silicon and Intel), Windows x86_64, and Linux x86_64. Release artifacts include `.dmg` and `.app.tar.gz` for macOS, `.exe` (NSIS) and `.msi` for Windows, and `.deb`, `.rpm`, and `.AppImage` for Linux — published on the GitHub Releases page.
+macOS (Apple Silicon and Intel, signed + notarized), Windows x86_64, and Linux x86_64. Release artifacts include `.dmg` and `.app.tar.gz` for macOS, `.exe` (NSIS) and `.msi` for Windows, and `.deb`, `.rpm`, and `.AppImage` for Linux — published on the GitHub Releases page.
 
 ### Why bare clones instead of full working trees?
 The point is archival, not active development. Bare clones skip the working directory entirely, halving disk usage and making fetch-only updates faster. If you need the working tree, extract the archive or `git clone` from the bare repo locally.
+
+### What happens if a local clone gets corrupted between runs?
+The worker health-checks the existing `.git` directory before reusing it. If `libgit2` can't open it as a valid bare repo, the worker falls back to a fresh clone rather than failing the fetch — a deleted-by-user, partially-written, or otherwise broken directory recovers automatically on the next update.

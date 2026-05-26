@@ -79,18 +79,15 @@ jobs:
         shell: bash
         working-directory: git-archiver-v2/src-tauri/target
         run: |
-          # tauri-action drops bundles into target/<triple>/release/bundle/<type>/.
-          # Hash every produced bundle artifact and write one checksums file
-          # per matrix entry so the upload step gets a unique filename.
           set -euo pipefail
           out="checksums-${{ matrix.platform }}.txt"
           : > "$out"
-          while IFS= read -r -d '' f; do
-            (cd "$(dirname "$f")" && shasum -a 256 "$(basename "$f")") >> "../../$out" || true
-          done < <(find . -type f \( -name "*.dmg" -o -name "*.AppImage" -o -name "*.deb" \) -print0)
-          # Surface filename — even if empty, the upload step needs the file to exist.
-          mv "$out" "../../$out" 2>/dev/null || true
-          cat "../../$out" || true
+          find . -type f \( -name "*.dmg" -o -name "*.AppImage" -o -name "*.deb" -o -name "*.rpm" \) -print0 \
+            | while IFS= read -r -d '' f; do
+                shasum -a 256 "$f" >> "$out"
+              done
+          echo "--- Computed checksums ---"
+          cat "$out"
 
       - name: Compute SHA-256 checksums (windows)
         if: matrix.platform == 'windows-latest'
@@ -109,5 +106,6 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           files: git-archiver-v2/src-tauri/target/checksums-${{ matrix.platform }}.txt
+          draft: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

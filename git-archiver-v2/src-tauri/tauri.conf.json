@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Git Archiver",
-  "version": "2.0.3",
+  "version": "2.0.4",
   "identifier": "com.technical1.gitarchiver",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -45,7 +45,7 @@
       "endpoints": [
         "https://github.com/Technical-1/Git-Archiver/releases/latest/download/latest.json"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE5MzkwN0JCN0ZFMUY4REQKUldUZCtPRi91d2M1cWZjbHBRMmk2ZFQvVFA4MXJkMDlqR3p1S3hzc3FyOWFYUVBGSWV2a1JWVVQK"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEIxRkQ3REY4MEQ1OEFFQ0EKUldUS3JsZ04rSDM5c1NoT1FRSldiQmdjNWhuK0ZMeGVBSkRjRGFUSHFyVmZhemhHdDVtbm5FeE8K"
     }
   }
 }
